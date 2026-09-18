@@ -1,7 +1,7 @@
 [project]
 name = "xo_os"
 version = "0.1.0"
-description = "description = "XO_OS — personal productivity OS for students: ICS import, Google Calendar sync, Obsidian export, Telegram bot, FastAPI, gamification (XP/levels/streaks), and incremental sync with conflict resolution.""
+description = "XO_OS — personal productivity OS for students: ICS import, Google Calendar sync, Obsidian export, Telegram bot, FastAPI, gamification (XP/levels/streaks), and incremental sync with conflict resolution."
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.116,<1.0",
@@ -50,3 +50,7 @@ addopts = "-q"
 [tool.setuptools.packages.find]
 include = ["app*"]
 exclude = ["data*", "frontend*", "tests*"]
+
+[tool.ruff.format]
+quote-style = "double"
+line-length = 88

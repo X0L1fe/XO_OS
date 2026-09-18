@@ -2,107 +2,118 @@ from __future__ import annotations
 
 import json
 import os
-
-from datetime import datetime, timezone, timedelta
+import secrets
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional, List
+from typing import Any, Optional
 
 from fastapi import (
+    Body,
+    Cookie,
+    Depends,
     FastAPI,
     File,
-    Query,
-    UploadFile,
+    Form,
     HTTPException,
+    Query,
     Request,
-    Body,
-    Form, 
-    Depends,
-    Cookie, 
-    Response, 
-    status
+    Response,
+    UploadFile,
+    status,
 )
-from pydantic import BaseModel
-from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from google.auth.transport.requests import Request as GoogleRequest
+from pydantic import BaseModel
 
-from app.database.db import Database
-from app.config import Settings
-from app.sync.service import SyncService
-from app.mais_parser import fetch_groups, fetch_group_schedule, parse_mais_schedule
-from app.database.models import UserStats, Lesson, User, Session
+from app.auth.schemas import AuthStatusResponse, UserCreate, UserLogin, UserResponse
 from app.auth.service import (
-    get_password_hash,
-    verify_password,
-    create_user,
     authenticate_user,
-    update_onboarding_completed,
+    confirm_email_change,
     create_session,
-    get_user_from_session,
+    create_user,
     delete_session,
+    get_password_hash,
+    get_user_from_session,
+    initiate_email_change,
+    initiate_password_reset,
+    update_onboarding_completed,
+    verify_and_reset_password,
+    verify_password,
 )
-from app.auth.schemas import (
-    UserCreate,
-    UserLogin,
-    UserResponse,
-    AuthStatusResponse
-    )
-
-from app.telegram.service import (
-    create_telegram_link_code,
-    unlink_telegram_account,
+from app.auth.service import (
+    verify_email as verify_email_service,
 )
+from app.config import Settings
+from app.database.db import Database
+from app.database.models import Lesson, Session, User, UserStats
+from app.email.service import EmailService
+from app.mais_parser import fetch_group_schedule, fetch_groups, parse_mais_schedule
+from app.sync.service import SyncService
 from app.telegram.schemas import (
     TelegramLinkResponse,
     TelegramStatusResponse,
     TelegramUnlinkResponse,
 )
+from app.telegram.service import (
+    create_telegram_link_code,
+    unlink_telegram_account,
+)
 
 # Try to import Google Calendar service; if not available, set to None.
 try:
-    from app.google_calendar.service import GoogleCalendarSyncService
-    from app.google_calendar.auth import get_credentials_path, get_token_path, SCOPES
     from google_auth_oauthlib.flow import Flow
+
+    from app.google_calendar.auth import SCOPES, get_credentials_path, get_token_path
+    from app.google_calendar.service import GoogleCalendarSyncService
+
     GOOGLE_OAUTH_AVAILABLE = True
 except ImportError:
     GoogleCalendarSyncService = None
     GOOGLE_OAUTH_AVAILABLE = False
 
-app = FastAPI(title='XO_OS', version='0.1.0')
+app = FastAPI(title="XO_OS", version="0.1.0")
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['http://127.0.0.1:8000'],
+    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
     allow_credentials=True,
-    allow_methods=['*'],
-    allow_headers=['*'],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-db = Database()
+app.mount("/static", StaticFiles(directory="app/web/static"), name="static")
 
+db = Database()
+settings = Settings()
 # Obsidian vault path configuration
-OBSIDIAN_CONFIG_PATH = Path('data/obsidian_config.json')
+OBSIDIAN_CONFIG_PATH = Path("data/obsidian_config.json")
+
 
 def get_obsidian_vault_path() -> Optional[str]:
     if OBSIDIAN_CONFIG_PATH.is_file():
         try:
-            data = json.loads(OBSIDIAN_CONFIG_PATH.read_text(encoding='utf-8'))
-            return data.get('vault_path')
+            data = json.loads(OBSIDIAN_CONFIG_PATH.read_text(encoding="utf-8"))
+            return data.get("vault_path")
         except Exception:
             return None
     return None
 
+
 def save_obsidian_vault_path(path: str) -> None:
     OBSIDIAN_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    data = {'vault_path': path}
-    OBSIDIAN_CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    data = {"vault_path": path}
+    OBSIDIAN_CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
 
 # Serve static files (frontend) if directory exists
-frontend_dir = Path(__file__).parent / 'web'
+frontend_dir = Path(__file__).parent / "web"
 if frontend_dir.is_dir():
     # We'll serve static files via a catch-all route below
     pass
+
 
 # Dependency to get current user from session cookie
 def get_current_user(session_token: Optional[str] = Cookie(None)) -> Optional[User]:
@@ -111,240 +122,587 @@ def get_current_user(session_token: Optional[str] = Cookie(None)) -> Optional[Us
     with db.session() as db_session:
         return get_user_from_session(db_session, session_token)
 
+
 # Dependency to require authentication
-def get_current_active_user(current_user: Optional[User] = Depends(get_current_user)) -> User:
+def get_current_active_user(
+    current_user: Optional[User] = Depends(get_current_user),
+) -> User:
     if not current_user:
-        raise HTTPException(status_code=401, detail='Not authenticated')
+        raise HTTPException(status_code=401, detail="Not authenticated")
     if not current_user.is_active:
-        raise HTTPException(status_code=400, detail='Inactive user')
+        raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
+
 # API routes under /api prefix
-@app.get('/api/health')
+@app.get("/api/health")
 def health() -> dict[str, str]:
-    return {'status': 'ok', 'service': 'XO_OS'}
+    return {"status": "ok", "service": "XO_OS"}
 
 
-@app.post('/api/export')
-async def export_to_obsidian(vault: Optional[str] = None, current_user: User = Depends(get_current_active_user)) -> dict[str, Any]:
-    '''Export lessons to Obsidian vault.'''
+@app.post("/api/export")
+async def export_to_obsidian(
+    vault: Optional[str] = None,
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, Any]:
+    """
+    Экспортируйте занятия в Obsidian.
+    """
     try:
-        vault_path = vault or get_obsidian_vault_path() or os.getenv('OBSIDIAN_VAULT_PATH')
+        vault_path = (
+            vault or get_obsidian_vault_path() or os.getenv("OBSIDIAN_VAULT_PATH")
+        )
         if not vault_path:
             return {
-                'status': 'error',
-                'message': "Obsidian vault path not provided. Set OBSIDIAN_VAULT_PATH environment variable, save via /api/obsidian/path, or pass 'vault' parameter."
+                "status": "error",
+                "message": "Obsidian vault path not provided. Set OBSIDIAN_VAULT_PATH environment variable, save via /api/obsidian/path, or pass 'vault' parameter.",
             }
         exported = SyncService(db).export_to_obsidian(vault_path)
         return {
-            'status': 'success',
-            'exported': exported,
-            'message': f'Exported {exported} lessons to Obsidian vault at {vault_path}'
+            "status": "success",
+            "exported": exported,
+            "message": f"Exported {exported} lessons to Obsidian vault at {vault_path}",
         }
     except Exception as e:
-        return {
-            'status': 'error',
-            'message': f'Failed to export to Obsidian: {str(e)}'
-        }
+        return {"status": "error", "message": f"Failed to export to Obsidian: {str(e)}"}
 
 
-@app.post('/api/auth/register')
+@app.post("/api/auth/register")
 async def register(user: UserCreate) -> Response:
-    '''Register a new user.'''
+    """Register a new user."""
     try:
         print(f"DEBUG: ENTERING TRY BLOCK")
         print(f"DEBUG: About to call create_user")
         with db.session() as db_session:
-            db_user = create_user(db_session, user)
-            db_session_obj = create_session(db_session, db_user.id)
-            response = {
-                'success': True,
-                'user': UserResponse.model_validate(db_user).model_dump()
+            # Initialize email service
+            email_service = EmailService(settings)
+            db_user = create_user(db_session, user, email_service)
+            # Do NOT auto-login - user must verify email first
+            # Build user response manually to avoid potential serialization issues
+            user_data = {
+                "id": db_user.id,
+                "name": db_user.name,
+                "email": db_user.email,
+                "onboarding_completed": bool(db_user.onboarding_completed),
             }
-            res = Response(
-                content=json.dumps(response), 
-                media_type='application/json'
-                )
-            res.set_cookie(
-                key='session_token',
-                value=db_session_obj.token,
-                httponly=True,
-                max_age=86400,  # 1 day
-                samesite='lax',
-                path='/',
-            )
+            response = {
+                "success": True,
+                "message": "Проверочное письмо отправлено на вашу электронную почту. Пожалуйста, проверьте письмо и перейдите по ссылке для подтверждения аккаунта.",
+                "user": user_data,
+            }
+            res = Response(content=json.dumps(response), media_type="application/json")
             return res
 
     except HTTPException:
         raise
-    
+
     except Exception as e:
         # Log the exception for debugging
         print(f"Registration error: {e}")
         import traceback
+
         traceback.print_exc()
 
         res = Response(
-            content=json.dumps({
-            'detail': str(e),
-            'type': type(e).__name__,
-            }),
-            media_type='application/json',
-            status_code=500
-            )
+            content=json.dumps(
+                {
+                    "detail": str(e),
+                    "type": type(e).__name__,
+                }
+            ),
+            media_type="application/json",
+            status_code=500,
+        )
         return res
 
 
-@app.post('/api/auth/login')
+@app.get("/api/auth/verify-email")
+async def verify_email(token: str = Query(...)) -> Response:
+    """Verify email using token from verification link."""
+    try:
+        with db.session() as db_session:
+            db_user = verify_email_service(db_session, token)
+            if db_user:
+                # Email verified successfully, create session and log user in
+                db_session_obj = create_session(db_session, db_user.id)
+                response = {
+                    "success": True,
+                    "message": "Электронная почта успешно подтверждена! Вы вошли в систему.",
+                    "user": UserResponse.model_validate(db_user).model_dump(),
+                }
+                res = Response(
+                    content=json.dumps(response), media_type="application/json"
+                )
+                res.set_cookie(
+                    key="session_token",
+                    value=db_session_obj.token,
+                    httponly=True,
+                    max_age=86400,  # 1 day
+                    samesite="lax",
+                    path="/",
+                )
+                return res
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Недействительный или истёкший токен подтверждения",
+                )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        # Log the exception for debugging
+        print(f"Email verification error: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+        res = Response(
+            content=json.dumps(
+                {
+                    "detail": str(e),
+                    "type": type(e).__name__,
+                }
+            ),
+            media_type="application/json",
+            status_code=500,
+        )
+        return res
+
+
+@app.post("/api/auth/resend-verification")
+async def resend_verification(email: str = Body(..., embed=True)) -> Response:
+    """Resend verification email to user."""
+    try:
+        with db.session() as db_session:
+            # Find user by email
+            db_user = db_session.query(User).filter(User.email == email).first()
+            if not db_user:
+                # Don't reveal that email doesn't exist for security
+                return Response(
+                    content=json.dumps(
+                        {
+                            "success": True,
+                            "message": "Если email существует в системе, письмо с подтверждением было отправлено",
+                        }
+                    ),
+                    media_type="application/json",
+                )
+
+            # Check if already verified
+            if db_user.email_verified:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Электронная почта уже подтверждена",
+                )
+
+            # Initialize email service
+            email_service = EmailService(settings)
+
+            # Generate new verification token
+            verification_token = secrets.token_urlsafe(32)
+            # Hash the token for storage (like we do with passwords)
+            verification_token_hash = get_password_hash(verification_token)
+            # Set expiration to 24 hours from now
+            verification_token_expires_at = datetime.now(timezone.utc) + timedelta(
+                hours=24
+            )
+
+            # Update user with new token
+            db_user.verification_token_hash = verification_token_hash
+            db_user.verification_token_expires_at = verification_token_expires_at
+            db_session.commit()
+
+            # Send verification email
+            try:
+                email_service.send_verification_email(
+                    email=email,
+                    verification_token=verification_token,
+                    frontend_url=settings.frontend_url,
+                )
+                print(f"DEBUG: Resent verification email to {email}")
+            except Exception as e:
+                print(f"DEBUG: Failed to send verification email: {e}")
+                # We don't want to fail the resend if email fails,
+                # but in a production app we might want to handle this differently
+
+            return Response(
+                content=json.dumps(
+                    {
+                        "success": True,
+                        "message": "Проверочное письмо отправлено на вашу электронную почту",
+                    }
+                ),
+                media_type="application/json",
+            )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        # Log the exception for debugging
+        print(f"Resend verification error: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+        res = Response(
+            content=json.dumps(
+                {
+                    "detail": str(e),
+                    "type": type(e).__name__,
+                }
+            ),
+            media_type="application/json",
+            status_code=500,
+        )
+        return res
+
+
+@app.post("/api/auth/login")
 async def login(user: UserLogin) -> Response:
-    '''Log in a user.'''
+    """Log in a user."""
     with db.session() as db_session:
         db_user = authenticate_user(db_session, user.email, user.password)
         if not db_user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail='Неверный email или пароль',
-                headers={'WWW-Authenticate': 'Bearer'},
+                detail="Неверный email или пароль",
+                headers={"WWW-Authenticate": "Bearer"},
             )
         # Create a session
         db_session_obj = create_session(db_session, db_user.id)
         response = {
-            'success': True,
-            'user': UserResponse.model_validate(db_user).model_dump()
+            "success": True,
+            "user": UserResponse.model_validate(db_user).model_dump(),
         }
-        res = Response(content=json.dumps(response), media_type='application/json')
+        res = Response(content=json.dumps(response), media_type="application/json")
         res.set_cookie(
-            key='session_token',
+            key="session_token",
             value=db_session_obj.token,
             httponly=True,
             max_age=86400,  # 1 day
-            samesite='lax',
-            path='/',
+            samesite="lax",
+            path="/",
         )
         return res
 
 
-@app.post('/api/auth/logout')
-async def logout(session_token: Optional[str] = Cookie(None), current_user: Optional[User] = Depends(get_current_user)) -> dict[str, Any]:
-    '''Log out the current user.'''
+@app.post("/api/auth/logout")
+async def logout(
+    session_token: Optional[str] = Cookie(None),
+    current_user: Optional[User] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Log out the current user."""
     with db.session() as db_session:
         if session_token:
             delete_session(db_session, session_token)
         # Clear the cookie
         from fastapi import Response
-        res = Response(content=json.dumps({'success': True}), media_type='application/json')
-        res.delete_cookie(key='session_token', path='/')
+
+        res = Response(
+            content=json.dumps({"success": True}), media_type="application/json"
+        )
+        res.delete_cookie(key="session_token", path="/")
         return res
 
 
-@app.get('/api/auth/me')
-async def get_current_user_info(current_user: Optional[User] = Depends(get_current_user)) -> dict[str, Any]:
-    '''Get the current user.'''
+@app.get("/api/auth/me")
+async def get_current_user_info(
+    current_user: Optional[User] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Get the current user."""
     if not current_user:
-        return {
-            'authenticated': False,
-            'user': None
-        }
-    return {
-        'authenticated': True,
-        'user': UserResponse.model_validate(current_user)
-    }
+        return {"authenticated": False, "user": None}
+    return {"authenticated": True, "user": UserResponse.model_validate(current_user)}
 
 
-@app.get('/api/auth/status')
-async def auth_status(current_user: Optional[User] = Depends(get_current_user)) -> AuthStatusResponse:
-    '''Check authentication status.'''
+@app.get("/api/auth/status")
+async def auth_status(
+    current_user: Optional[User] = Depends(get_current_user),
+) -> AuthStatusResponse:
+    """Check authentication status."""
     if not current_user:
         return AuthStatusResponse(
-            authenticated=False,
-            user=None,
-            onboarding_completed=False
+            authenticated=False, user=None, onboarding_completed=False
         )
     return AuthStatusResponse(
         authenticated=True,
         user=UserResponse.model_validate(current_user),
-        onboarding_completed=current_user.onboarding_completed
+        onboarding_completed=current_user.onboarding_completed,
     )
 
 
+# NEW ENDPOINTS FOR PASSWORD RESET AND EMAIL CHANGE
+
+
+@app.post("/api/auth/initiate-password-reset")
+async def initiate_password_reset_endpoint(
+    email: str = Body(..., embed=True),
+) -> Response:
+    """Initiate password reset process."""
+    try:
+        with db.session() as db_session:
+            email_service = EmailService(settings)
+            success = initiate_password_reset(
+                db_session, email, email_service, settings.frontend_url
+            )
+            # Always return success for security (to not leak whether email exists)
+            return Response(
+                content=json.dumps(
+                    {
+                        "success": True,
+                        "message": "Если email существует в системе, письмо с инструкциями по сбросу пароля было отправлено",
+                    }
+                ),
+                media_type="application/json",
+            )
+    except Exception as e:
+        print(f"Initiate password reset error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return Response(
+            content=json.dumps(
+                {
+                    "success": True,
+                    "message": "Если email существует в системе, письмо с инструкциями по сбросу пароля было отправлено",
+                }
+            ),
+            media_type="application/json",
+        )
+
+
+@app.post("/api/auth/reset-password")
+async def reset_password_endpoint(
+    token: str = Body(..., embed=True), new_password: str = Body(..., embed=True)
+) -> Response:
+    """Reset password using token and new password."""
+    try:
+        with db.session() as db_session:
+            db_user = verify_and_reset_password(db_session, token, new_password)
+            if db_user:
+                # Password reset successful, create session and log user in
+                db_session_obj = create_session(db_session, db_user.id)
+                response = {
+                    "success": True,
+                    "message": "Пароль успешно изменён! Вы вошли в систему.",
+                    "user": UserResponse.model_validate(db_user).model_dump(),
+                }
+                res = Response(
+                    content=json.dumps(response), media_type="application/json"
+                )
+                res.set_cookie(
+                    key="session_token",
+                    value=db_session_obj.token,
+                    httponly=True,
+                    max_age=86400,  # 1 day
+                    samesite="lax",
+                    path="/",
+                )
+                return res
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Недействительный или истёкший токен сброса пароля",
+                )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Reset password error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Внутренняя ошибка сервера",
+        )
+
+
+@app.post("/api/auth/initiate-email-change")
+async def initiate_email_change_endpoint(
+    new_email: str = Body(..., embed=True),
+    password: str = Body(..., embed=True),
+    current_user: User = Depends(get_current_active_user),
+) -> Response:
+    """Initiate email change process (requires current authentication)."""
+    try:
+        with db.session() as db_session:
+            email_service = EmailService(settings)
+            success = initiate_email_change(
+                db_session,
+                current_user.id,
+                new_email,
+                password,
+                email_service,
+                settings.frontend_url,
+            )
+            if success:
+                return Response(
+                    content=json.dumps(
+                        {
+                            "success": True,
+                            "message": "Письмо с подтверждением отправлено на ваш текущий email. Пожалуйста, проверьте почту и перейдите по ссылке для подтверждения смены email.",
+                        }
+                    ),
+                    media_type="application/json",
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Не удалось инициировать смену email. Проверьте формат нового email или попробуйте позже.",
+                )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Initiate email change error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Внутренняя ошибка сервера",
+        )
+
+
+@app.post("/api/auth/confirm-email-change")
+async def confirm_email_change_endpoint(
+    token: str = Body(..., embed=True),
+    new_email: str = Body(..., embed=True),
+    password: str = Body(..., embed=True),
+) -> Response:
+    """Confirm email change using token, new email, and current password."""
+    try:
+        with db.session() as db_session:
+            db_user = confirm_email_change(db_session, token, new_email, password)
+            if db_user:
+                # Email change successful
+                return Response(
+                    content=json.dumps(
+                        {
+                            "success": True,
+                            "message": "Email успешно изменён!",
+                            "user": UserResponse.model_validate(db_user).model_dump(),
+                        }
+                    ),
+                    media_type="application/json",
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Недействительный или истёкший токен, неверный email или пароль",
+                )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Confirm email change error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Внутренняя ошибка сервера",
+        )
+
+
 # Additional API routes
-@app.get('/api/stats')
+@app.get("/api/stats")
 def get_stats(current_user: User = Depends(get_current_active_user)):
-    '''Get stats for the current user.'''
+    """Get stats for the current user."""
     with db.session() as session:
-        stats = session.query(UserStats).filter(UserStats.user_id == current_user.id).first()
+        stats = (
+            session.query(UserStats)
+            .filter(UserStats.user_id == current_user.id)
+            .first()
+        )
         if not stats:
             # Should not happen if we create stats for each user, but just in case
             stats = UserStats(user_id=current_user.id)
             session.add(stats)
             session.commit()
         return {
-            'level': stats.level,
-            'total_xp': stats.total_xp,
-            'current_streak': stats.current_streak,
-            'max_streak': stats.max_streak,
-            'last_activity_date': stats.last_activity_date.isoformat() if stats.last_activity_date else None
+            "level": stats.level,
+            "total_xp": stats.total_xp,
+            "current_streak": stats.current_streak,
+            "max_streak": stats.max_streak,
+            "last_activity_date": stats.last_activity_date.isoformat()
+            if stats.last_activity_date
+            else None,
         }
 
 
-@app.get('/api/now')
+@app.get("/api/now")
 def get_now(current_user: User = Depends(get_current_active_user)):
-    '''Get current lesson if any.'''
+    """Get current lesson if any."""
     from datetime import datetime, timezone
+
     now = datetime.now(timezone.utc)
     with db.session() as session:
-        lesson = session.query(Lesson).filter(
-            Lesson.user_id == current_user.id,
-            Lesson.start_time <= now,
-            Lesson.end_time >= now
-        ).order_by(Lesson.start_time).first()
+        lesson = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time <= now,
+                Lesson.end_time >= now,
+            )
+            .order_by(Lesson.start_time)
+            .first()
+        )
         if lesson:
             return {
-                'taskTitle': lesson.subject,
-                'taskDesc': lesson.description or '',
-                'timeEstimate': f'{lesson.start_time.strftime('%H:%M')} - {lesson.end_time.strftime('%H:%M')}',
-                'priority': lesson.lesson_type,
-                'xpReward': 10,  # XP per lesson as in sync service
-                'time': lesson.start_time.strftime('%H:%M')
+                "taskTitle": lesson.subject,
+                "taskDesc": lesson.description or "",
+                "timeEstimate": f"{lesson.start_time.strftime('%H:%M')} - {lesson.end_time.strftime('%H:%M')}",
+                "priority": lesson.lesson_type,
+                "xpReward": 10,  # XP per lesson as in sync service
+                "time": lesson.start_time.strftime("%H:%M"),
             }
         # No current lesson
         return {
-            'taskTitle': '',
-            'taskDesc': '',
-            'timeEstimate': '',
-            'priority': '',
-            'xpReward': 0,
-            'time': '--:--'
+            "taskTitle": "",
+            "taskDesc": "",
+            "timeEstimate": "",
+            "priority": "",
+            "xpReward": 0,
+            "time": "--:--",
         }
 
 
-@app.get('/api/schedule')
+@app.get("/api/schedule")
 def get_schedule(current_user: User = Depends(get_current_active_user)):
-    '''Get upcoming lessons.'''
+    """Get upcoming lessons."""
     from datetime import datetime, timezone
+
     now = datetime.now(timezone.utc)
     with db.session() as session:
-        lessons = session.query(Lesson).filter(
-            Lesson.user_id == current_user.id,
-            Lesson.start_time >= now
-        ).order_by(Lesson.start_time).limit(50).all()
+        lessons = (
+            session.query(Lesson)
+            .filter(Lesson.user_id == current_user.id, Lesson.start_time >= now)
+            .order_by(Lesson.start_time)
+            .limit(50)
+            .all()
+        )
         result = []
         for lesson in lessons:
-            result.append({
-                'time': lesson.start_time.strftime('%H:%M'),
-                'subject': lesson.subject,
-                'type': lesson.lesson_type,
-                'room': lesson.room or '',
-                'teacher': lesson.teacher or '',
-                'status': 'sync' if lesson.google_event_id else 'unsynced'
-            })
+            result.append(
+                {
+                    "time": lesson.start_time.strftime("%H:%M"),
+                    "subject": lesson.subject,
+                    "type": lesson.lesson_type,
+                    "room": lesson.room or "",
+                    "teacher": lesson.teacher or "",
+                    "status": "sync" if lesson.google_event_id else "unsynced",
+                }
+            )
         return result
 
 
-@app.get('/api/stats/semester')
+@app.get("/api/stats/semester")
 def get_semester_stats(current_user: User = Depends(get_current_active_user)):
-    '''Get semester stats.'''
-    from datetime import datetime, timezone, timedelta
+    """Get semester stats."""
+    from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
     # Determine semester boundaries: assuming spring semester Feb-May, autumn Sep-Dec
     if 2 <= now.month <= 5:
@@ -357,77 +715,93 @@ def get_semester_stats(current_user: User = Depends(get_current_active_user)):
         semester_end = datetime(now.year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
     else:
         # Jan, Jun-Aug: no semester, return zeros
-        return {'lecture': 0, 'practice': 0, 'lab': 0, 'total': 0}
+        return {"lecture": 0, "practice": 0, "lab": 0, "total": 0}
     with db.session() as session:
-        lectures = session.query(Lesson).filter(
-            Lesson.user_id == current_user.id,
-            Lesson.start_time >= semester_start,
-            Lesson.start_time <= semester_end,
-            Lesson.lesson_type == 'LECTURE'
-        ).count()
-        practices = session.query(Lesson).filter(
-            Lesson.user_id == current_user.id,
-            Lesson.start_time >= semester_start,
-            Lesson.start_time <= semester_end,
-            Lesson.lesson_type == 'PRACTICE'
-        ).count()
-        labs = session.query(Lesson).filter(
-            Lesson.user_id == current_user.id,
-            Lesson.start_time >= semester_start,
-            Lesson.start_time <= semester_end,
-            Lesson.lesson_type == 'LAB'
-        ).count()
-        total = session.query(Lesson).filter(
-            Lesson.user_id == current_user.id,
-            Lesson.start_time >= semester_start,
-            Lesson.start_time <= semester_end
-        ).count()
-        return {
-            'lecture': lectures,
-            'practice': practices,
-            'lab': labs,
-            'total': total
-        }
+        lectures = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time >= semester_start,
+                Lesson.start_time <= semester_end,
+                Lesson.lesson_type == "LECTURE",
+            )
+            .count()
+        )
+        practices = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time >= semester_start,
+                Lesson.start_time <= semester_end,
+                Lesson.lesson_type == "PRACTICE",
+            )
+            .count()
+        )
+        labs = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time >= semester_start,
+                Lesson.start_time <= semester_end,
+                Lesson.lesson_type == "LAB",
+            )
+            .count()
+        )
+        total = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time >= semester_start,
+                Lesson.start_time <= semester_end,
+            )
+            .count()
+        )
+        return {"lecture": lectures, "practice": practices, "lab": labs, "total": total}
 
 
-@app.get('/api/stats/weekly')
+@app.get("/api/stats/weekly")
 def get_weekly_stats(current_user: User = Depends(get_current_active_user)):
-    '''Get weekly hours for the current week.'''
-    from datetime import datetime, timezone, timedelta
+    """Get weekly hours for the current week."""
+    from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
     # Start of week (Monday)
     start_of_week = now - timedelta(days=now.weekday())
     start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_week = start_of_week + timedelta(days=7)
     with db.session() as session:
-        lessons = session.query(Lesson).filter(
-            Lesson.user_id == current_user.id,
-            Lesson.start_time >= start_of_week,
-            Lesson.start_time < end_of_week
-        ).all()
+        lessons = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time >= start_of_week,
+                Lesson.start_time < end_of_week,
+            )
+            .all()
+        )
         total_hours = 0.0
         for lesson in lessons:
             duration = (lesson.end_time - lesson.start_time).total_seconds() / 3600.0
             total_hours += duration
         # Return as a single week (label '1')
-        return [{'label': '1', 'hours': round(total_hours, 2)}]
+        return [{"label": "1", "hours": round(total_hours, 2)}]
 
 
-@app.get('/api/stats/planfact')
+@app.get("/api/stats/planfact")
 def get_plan_fact(current_user: User = Depends(get_current_active_user)):
-    '''Get plan vs fact hours.'''
+    """Get plan vs fact hours."""
     # Placeholder: plan/fact tracking not implemented.
     # Return zeros for all categories.
     return {
-        'study': {'plan': 0, 'fact': 0},
-        'projects': {'plan': 0, 'fact': 0},
-        'self': {'plan': 0, 'fact': 0}
+        "study": {"plan": 0, "fact": 0},
+        "projects": {"plan": 0, "fact": 0},
+        "self": {"plan": 0, "fact": 0},
     }
 
 
-@app.get('/api/stats/topsubjects')
+@app.get("/api/stats/topsubjects")
 def get_top_subjects(current_user: User = Depends(get_current_active_user)):
-    '''Get top subjects by total hours.'''
+    """Get top subjects by total hours."""
     with db.session() as session:
         lessons = session.query(Lesson).filter(Lesson.user_id == current_user.id).all()
         subject_hours = {}
@@ -436,16 +810,25 @@ def get_top_subjects(current_user: User = Depends(get_current_active_user)):
             subject = lesson.subject
             subject_hours[subject] = subject_hours.get(subject, 0) + duration
         # Sort descending by hours and take top 5
-        sorted_subjects = sorted(subject_hours.items(), key=lambda x: x[1], reverse=True)[:5]
-        result = [{'name': subject, 'hours': round(hours, 2)} for subject, hours in sorted_subjects]
+        sorted_subjects = sorted(
+            subject_hours.items(), key=lambda x: x[1], reverse=True
+        )[:5]
+        result = [
+            {"name": subject, "hours": round(hours, 2)}
+            for subject, hours in sorted_subjects
+        ]
         return result
 
 
-@app.get('/api/achievements')
+@app.get("/api/achievements")
 def get_achievements(current_user: User = Depends(get_current_active_user)):
-    '''Get achievements based on stats.'''
+    """Get achievements based on stats."""
     with db.session() as session:
-        stats = session.query(UserStats).filter(UserStats.user_id == current_user.id).first()
+        stats = (
+            session.query(UserStats)
+            .filter(UserStats.user_id == current_user.id)
+            .first()
+        )
         if not stats:
             stats = UserStats(user_id=current_user.id)
             session.add(stats)
@@ -453,99 +836,101 @@ def get_achievements(current_user: User = Depends(get_current_active_user)):
         achievements = []
         # Streak achievements
         if stats.current_streak >= 7:
-            achievements.append(f'Стаж {stats.current_streak} дней')
+            achievements.append(f"Стаж {stats.current_streak} дней")
         if stats.current_streak >= 30:
-            achievements.append(f'Стаж {stats.current_streak} дней')
+            achievements.append(f"Стаж {stats.current_streak} дней")
         # Level achievements
         if stats.level >= 1:
-            achievements.append(f'Уровень {stats.level}')
+            achievements.append(f"Уровень {stats.level}")
         if stats.level >= 5:
-            achievements.append(f'Уровень {stats.level}')
+            achievements.append(f"Уровень {stats.level}")
         if stats.level >= 10:
-            achievements.append(f'Уровень {stats.level}')
+            achievements.append(f"Уровень {stats.level}")
         # XP achievements
         if stats.total_xp >= 1000:
-            achievements.append('Новичок')
+            achievements.append("Новичок")
         if stats.total_xp >= 5000:
-            achievements.append('Опытный')
+            achievements.append("Опытный")
         if stats.total_xp >= 10000:
-            achievements.append('Ветеран')
-        return {
-            'achievements': achievements,
-            'streak': stats.current_streak
-        }
+            achievements.append("Ветеран")
+        return {"achievements": achievements, "streak": stats.current_streak}
 
 
-@app.get('/api/calendar/status')
+@app.get("/api/calendar/status")
 def get_calendar_status():
-    '''Get calendar status.'''
+    """Get calendar status."""
     if not GOOGLE_OAUTH_AVAILABLE:
-        return {'status': 'disconnected'}
+        return {"status": "disconnected"}
     try:
         token_path = get_token_path()
         if os.path.exists(token_path):
             from google.oauth2.credentials import Credentials
+
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
             if creds and creds.valid:
-                return {'status': 'connected'}
+                return {"status": "connected"}
             elif creds and creds.expired and creds.refresh_token:
                 # Try to refresh
                 from google.auth.transport.requests import Request
+
                 creds.refresh(Request())
                 # Save refreshed token
-                with open(token_path, 'w') as token_file:
+                with open(token_path, "w") as token_file:
                     token_file.write(creds.to_json())
-                return {'status': 'connected'}
-        return {'status': 'disconnected'}
+                return {"status": "connected"}
+        return {"status": "disconnected"}
     except Exception:
-        return {'status': 'disconnected'}
+        return {"status": "disconnected"}
 
 
-@app.get('/api/obsidian/status')
+@app.get("/api/obsidian/status")
 def get_obsidian_status():
-    '''Get obsidian status.'''
-    vault_path = os.getenv('OBSIDIAN_VAULT_PATH')
+    """Get obsidian status."""
+    vault_path = os.getenv("OBSIDIAN_VAULT_PATH")
     if vault_path:
-        return {'status': 'ready'}
-    return {'status': 'not_configured'}
+        return {"status": "ready"}
+    return {"status": "not_configured"}
 
 
 class ObsidianPath(BaseModel):
     vault: str
 
-@app.get('/api/obsidian/path')
+
+@app.get("/api/obsidian/path")
 def get_obsidian_path():
-    '''Get saved Obsidian vault path.'''
+    """Get saved Obsidian vault path."""
     path = get_obsidian_vault_path()
     if path is None:
-        return {'path': ''}
-    return {'path': path}
+        return {"path": ""}
+    return {"path": path}
 
 
-@app.post('/api/obsidian/path')
+@app.post("/api/obsidian/path")
 def set_obsidian_path(data: ObsidianPath):
-    '''Save Obsidian vault path.'''
+    """Save Obsidian vault path."""
     vault = data.vault
     if not vault or not vault.strip():
-        raise HTTPException(status_code=400, detail='Obsidian vault path cannot be empty')
+        raise HTTPException(
+            status_code=400, detail="Obsidian vault path cannot be empty"
+        )
     vault = vault.strip()
     save_obsidian_vault_path(vault)
-    return {'status': 'success', 'path': vault}
+    return {"status": "success", "path": vault}
 
 
-@app.get('/api/mais/groups')
+@app.get("/api/mais/groups")
 def get_mais_groups():
-    '''Get list of MAIS groups.'''
+    """Get list of MAIS groups."""
     try:
         groups = fetch_groups()
-        return {'groups': groups}
+        return {"groups": groups}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f'Failed to fetch groups: {e}')
+        raise HTTPException(status_code=500, detail=f"Failed to fetch groups: {e}")
 
 
-@app.post('/api/mais/import')
+@app.post("/api/mais/import")
 def import_mais_schedule(group_name: str = Form(...)):
-    '''Import schedule for a given MAIS group name.'''
+    """Import schedule for a given MAIS group name."""
     try:
         # Fetch schedule JSON
         json_bytes = fetch_group_schedule(group_name)
@@ -555,94 +940,97 @@ def import_mais_schedule(group_name: str = Form(...)):
         sync_service = SyncService(db)
         result = sync_service.import_lesson_data(lessons)
         return {
-            'status': 'success',
-            'group': group_name,
-            'parsed': result.parsed,
-            'created': result.created,
-            'updated': result.updated,
-            'moved': result.moved,
-            'deleted': result.deleted,
-            'unchanged': result.unchanged,
+            "status": "success",
+            "group": group_name,
+            "parsed": result.parsed,
+            "created": result.created,
+            "updated": result.updated,
+            "moved": result.moved,
+            "deleted": result.deleted,
+            "unchanged": result.unchanged,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f'Failed to import schedule for group \'{group_name}\': {e}')
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to import schedule for group '{group_name}': {e}",
+        )
 
 
 # Google OAuth endpoints
-@app.get('/api/google/auth')
+@app.get("/api/google/auth")
 async def google_auth():
-    '''Initiate Google OAuth2 flow.'''
+    """Initiate Google OAuth2 flow."""
     if not GOOGLE_OAUTH_AVAILABLE:
         raise HTTPException(
             status_code=501,
-            detail='Google OAuth not available',
+            detail="Google OAuth not available",
         )
     try:
         flow = Flow.from_client_secrets_file(
             get_credentials_path(),
             scopes=SCOPES,
-            redirect_uri='http://localhost:8000/api/google/callback',
+            redirect_uri="http://127.0.0.1:8000/api/google/callback",
         )
         authorization_url, state = flow.authorization_url(
-            access_type='offline',
-            include_granted_scopes='true',
-            prompt='consent',
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
         )
         response = RedirectResponse(url=authorization_url)
         response.set_cookie(
-            key='oauth_state',
+            key="oauth_state",
             value=state,
             httponly=True,
             max_age=600,
-            samesite='lax',
+            samesite="lax",
         )
         response.set_cookie(
-            key='oauth_code_verifier',
+            key="oauth_code_verifier",
             value=flow.code_verifier,
             httponly=True,
             max_age=600,
-            samesite='lax',
+            samesite="lax",
         )
         return response
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f'Failed to initiate OAuth flow: {e}',
+            detail=f"Failed to initiate OAuth flow: {e}",
         )
 
 
-@app.get('/api/google/callback')
+@app.get("/api/google/callback")
 async def google_callback(request: Request):
-    '''Handle Google OAuth2 callback.'''
+    """Handle Google OAuth2 callback."""
     if not GOOGLE_OAUTH_AVAILABLE:
         raise HTTPException(
             status_code=501,
-            detail='Google OAuth not available',
+            detail="Google OAuth not available",
         )
     try:
-        code = request.query_params.get('code')
-        state = request.query_params.get('state')
-        saved_state = request.cookies.get('oauth_state')
-        code_verifier = request.cookies.get('oauth_code_verifier')
+        code = request.query_params.get("code")
+        state = request.query_params.get("state")
+        saved_state = request.cookies.get("oauth_state")
+        code_verifier = request.cookies.get("oauth_code_verifier")
         if not code:
             raise HTTPException(
                 status_code=400,
-                detail='Missing authorization code',
+                detail="Missing authorization code",
             )
         if not state or state != saved_state:
             raise HTTPException(
                 status_code=400,
-                detail='Invalid OAuth state',
+                detail="Invalid OAuth state",
             )
         if not code_verifier:
             raise HTTPException(
                 status_code=400,
-                detail='Missing PKCE code verifier',
+                detail="Missing PKCE code verifier",
             )
         flow = Flow.from_client_secrets_file(
             get_credentials_path(),
             scopes=SCOPES,
-            redirect_uri='http://localhost:8000/api/google/callback',
+            redirect_uri="http://127.0.0.1:8000/api/google/callback",
             code_verifier=code_verifier,
             autogenerate_code_verifier=False,
         )
@@ -650,83 +1038,81 @@ async def google_callback(request: Request):
         creds = flow.credentials
         with open(
             get_token_path(),
-            'w',
-            encoding='utf-8',
+            "w",
+            encoding="utf-8",
         ) as token_file:
             token_file.write(creds.to_json())
         response = RedirectResponse(
-            url='http://localhost:8000/#settings?connected=true'
+            url="http://127.0.0.1:8000/#settings?connected=true"
         )
-        response.delete_cookie('oauth_state')
-        response.delete_cookie('oauth_code_verifier')
+        response.delete_cookie("oauth_state")
+        response.delete_cookie("oauth_code_verifier")
         return response
     except Exception as e:
-        return RedirectResponse(
-            url=(
-                'http://localhost:8000/#settings'
-                f'?error={str(e)}'
-            )
-        )
+        return RedirectResponse(url=(f"http://127.0.0.1:8000/#settings?error={str(e)}"))
 
 
-@app.get('/api/google/status')
+@app.get("/api/google/status")
 async def google_status():
-    '''Check Google connection status.'''
+    """Check Google connection status."""
     if not GOOGLE_OAUTH_AVAILABLE:
-        return {'connected': False, 'error': 'Google OAuth not available'}
+        return {"connected": False, "error": "Google OAuth not available"}
     try:
         token_path = get_token_path()
         if os.path.exists(token_path):
             from google.oauth2.credentials import Credentials
+
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
             if creds and creds.valid:
-                return {'connected': True}
+                return {"connected": True}
             elif creds and creds.expired and creds.refresh_token:
                 # Try to refresh
                 from google.auth.transport.requests import Request
+
                 creds.refresh(Request())
                 # Save refreshed token
-                with open(token_path, 'w') as token_file:
+                with open(token_path, "w") as token_file:
                     token_file.write(creds.to_json())
-                return {'connected': True}
-        return {'connected': False}
+                return {"connected": True}
+        return {"connected": False}
     except Exception:
-        return {'connected': False}
+        return {"connected": False}
 
 
-@app.post('/api/google/disconnect')
+@app.post("/api/google/disconnect")
 async def google_disconnect():
-    '''Disconnect/revoke Google OAuth tokens.'''
+    """Disconnect/revoke Google OAuth tokens."""
     if not GOOGLE_OAUTH_AVAILABLE:
-        raise HTTPException(status_code=501, detail='Google OAuth not available')
+        raise HTTPException(status_code=501, detail="Google OAuth not available")
     try:
         token_path = get_token_path()
         if os.path.exists(token_path):
             os.remove(token_path)
-        return {'success': True}
+        return {"success": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f'Failed to disconnect: {str(e)}')
+        raise HTTPException(status_code=500, detail=f"Failed to disconnect: {str(e)}")
 
 
-@app.post('/api/debug/echo')
+@app.post("/api/debug/echo")
 async def echo(request: Request):
     body = await request.body()
     try:
-        decoded = body.decode('utf-8')
+        decoded = body.decode("utf-8")
     except UnicodeDecodeError:
-        decoded = body.decode('utf-8', errors='replace')
-    return {'body': decoded, 'body_bytes': list(body)}
+        decoded = body.decode("utf-8", errors="replace")
+    return {"body": decoded, "body_bytes": list(body)}
 
 
-@app.get('/api/mais/import_get')
+@app.get("/api/mais/import_get")
 def import_mais_schedule_get(group_name: str):
-    '''Get the group name as a test.'''
-    return {'group_name': group_name}
+    """Get the group name as a test."""
+    return {"group_name": group_name}
 
 
 # ============================================================
 # TELEGRAM
 # ============================================================
+
 
 @app.post(
     "/api/telegram/link",
@@ -803,17 +1189,19 @@ async def telegram_unlink(
         success=True,
     )
 
+
 # Trigger reload
 
+
 # Catch-all route for serving frontend (if exists)
-@app.get('/{full_path:path}')
+@app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
-    '''Serve frontend.'''
+    """Serve frontend."""
     if frontend_dir.is_dir():
         requested_file = frontend_dir / full_path
         if requested_file.is_file():
             return FileResponse(requested_file)
-        index_file = frontend_dir / 'index.html'
+        index_file = frontend_dir / "index.html"
         if index_file.is_file():
             return FileResponse(index_file)
-    raise HTTPException(status_code=404, detail='Frontend not found')
+    raise HTTPException(status_code=404, detail="Frontend not found")

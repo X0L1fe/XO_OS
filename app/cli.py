@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from app.database.db import Database
+from app.database.models import User
 from app.sync.service import SyncService
 
 
@@ -42,6 +43,15 @@ def cmd_import_ics(
 ) -> int:
     """Import an ICS file and optionally sync it to Google Calendar."""
 
+    with db.session() as session:
+        user = session.query(User).filter(User.id == user_id).first()
+
+    if user is None:
+        print(
+            f"User with ID {user_id} not found.",
+            file=sys.stderr,
+        )
+
     path = Path(file_path)
 
     if not path.is_file():
@@ -64,11 +74,10 @@ def cmd_import_ics(
                     GoogleCalendarSyncService,
                 )
 
-                google_calendar_service = (
-                    GoogleCalendarSyncService(
-                        db,
-                        calendar_name=calendar,
-                    )
+                google_calendar_service = GoogleCalendarSyncService(
+                    db,
+                    calendar_name=calendar,
+                    user_id=user_id,
                 )
 
             except Exception as exc:
@@ -128,11 +137,7 @@ def cmd_stats(db: Database) -> int:
         from app.database.models import UserStats
 
         with db.session() as session:
-            stats = (
-                session.query(UserStats)
-                .order_by(UserStats.id)
-                .first()
-            )
+            stats = session.query(UserStats).order_by(UserStats.id).first()
 
             if stats is None:
                 print("No statistics found.")
@@ -142,10 +147,7 @@ def cmd_stats(db: Database) -> int:
             print(f"Total XP:        {stats.total_xp}")
             print(f"Current streak:  {stats.current_streak}")
             print(f"Max streak:      {stats.max_streak}")
-            print(
-                "Last activity:   "
-                f"{stats.last_activity_date}"
-            )
+            print(f"Last activity:   {stats.last_activity_date}")
 
         return 0
 
@@ -256,9 +258,7 @@ def main() -> int:
     if args.command == "stats":
         return cmd_stats(db)
 
-    parser.error(
-        f"Unknown command: {args.command}"
-    )
+    parser.error(f"Unknown command: {args.command}")
 
     return 2
 

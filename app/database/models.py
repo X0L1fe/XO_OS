@@ -1,10 +1,22 @@
-
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, BigInteger
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    relationship,
+)
 
 
 class Base(DeclarativeBase):
@@ -12,51 +24,78 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
-    __tablename__ = 'users'
+    __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
-        index=True
-        )
+        index=True,
+    )
     email: Mapped[str] = mapped_column(
         String(255),
         unique=True,
         index=True,
-        nullable=False
-        )
+        nullable=False,
+    )
     name: Mapped[str] = mapped_column(
         String(255),
-        nullable=False
-        )
+        nullable=False,
+    )
     password_hash: Mapped[str] = mapped_column(
-        String(255), 
-        nullable=False
-        )
+        String(255),
+        nullable=False,
+    )
     is_active: Mapped[bool] = mapped_column(
-        Integer, 
-        default=1
-        )  # using Integer for boolean compatibility with SQLite
+        Integer,
+        default=1,
+    )  # using Integer for boolean compatibility with SQLite
     onboarding_completed: Mapped[bool] = mapped_column(
-        Integer, 
-        default=0
-        )
+        Integer,
+        default=0,
+    )
+    email_verified: Mapped[bool] = mapped_column(
+        Integer,
+        default=0,
+    )  # Track if email has been verified
+    verification_token_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )  # Hashed verification token for email verification
+    verification_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )  # Expiration time for verification token
+    # Fields for email change
+    email_change_token_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )  # Hashed token for email change verification
+    email_change_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )  # Expiration for email change token
+    new_email: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )  # Pending new email address
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.now(timezone.utc)
-        )
+        default=datetime.now(timezone.utc),
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=datetime.now(timezone.utc),
-        onupdate=datetime.now(timezone.utc)
-        )
+        onupdate=datetime.now(timezone.utc),
+    )
 
     # Relationship to UserStats (one-to-one)
-    stats: Mapped['UserStats'] = relationship(
-        back_populates='user',
+    stats: Mapped["UserStats"] = relationship(
+        back_populates="user",
         uselist=False,
-        cascade='all, delete-orphan'
-        )
+        cascade="all, delete-orphan",
+    )
     telegram_id: Mapped[int | None] = mapped_column(
         BigInteger,
         unique=True,
@@ -67,6 +106,7 @@ class User(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
 
 class TelegramLinkCode(Base):
     __tablename__ = "telegram_link_codes"
@@ -107,156 +147,155 @@ class TelegramLinkCode(Base):
 
     user: Mapped["User"] = relationship()
 
+
 class UserStats(Base):
-    __tablename__ = 'user_stats'
+    __tablename__ = "user_stats"
 
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
-        index=True
-        )
+        index=True,
+    )
     user_id: Mapped[int] = mapped_column(
-        ForeignKey('users.id'),
-        unique=True,
-        nullable=False
-        )
+        ForeignKey("users.id"), unique=True, nullable=False
+    )
     total_xp: Mapped[int] = mapped_column(
         Integer,
-        default=0
-        )
+        default=0,
+    )
     current_streak: Mapped[int] = mapped_column(
         Integer,
-        default=0
-        )
+        default=0,
+    )
     max_streak: Mapped[int] = mapped_column(
         Integer,
-        default=0
-        )
+        default=0,
+    )
     last_activity_date: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), 
-        nullable=True
-        )
+        DateTime(timezone=True),
+        nullable=True,
+    )
     level: Mapped[int] = mapped_column(
-        Integer, 
-        default=1
-        )
+        Integer,
+        default=1,
+    )
 
     # Relationship to User
-    user: Mapped['User'] = relationship(back_populates='stats')
+    user: Mapped["User"] = relationship(back_populates="stats")
 
 
 class Session(Base):
-    __tablename__ = 'sessions'
+    __tablename__ = "sessions"
 
     id: Mapped[int] = mapped_column(
-        Integer, 
-        primary_key=True, 
-        index=True
-        )
+        Integer,
+        primary_key=True,
+        index=True,
+    )
     user_id: Mapped[int] = mapped_column(
-        ForeignKey('users.id'),
-        nullable=False
-        )
+        ForeignKey("users.id"),
+        nullable=False,
+    )
     token: Mapped[str] = mapped_column(
         String(255),
         unique=True,
         index=True,
-        nullable=False
-        )
+        nullable=False,
+    )
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        nullable=False
-        )
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.now(timezone.utc)
-        )
+        default=datetime.now(timezone.utc),
+    )
 
     # Relationship to User
-    user: Mapped['User'] = relationship()
+    user: Mapped["User"] = relationship()
 
 
 class Lesson(Base):
-    __tablename__ = 'lessons'
+    __tablename__ = "lessons"
 
     id: Mapped[int] = mapped_column(
-        Integer, 
-        primary_key=True
-        )
+        Integer,
+        primary_key=True,
+        index=True,
+    )
     stable_id: Mapped[str] = mapped_column(
-        String(128), 
-        index=True
-        )
+        String(128),
+        index=True,
+    )
     source_uid: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
-        index=True
-        )
+        index=True,
+    )
     subject: Mapped[str] = mapped_column(
-        String(255)
-        )
+        String(255),
+    )
     lesson_type: Mapped[str] = mapped_column(
-        String(32), 
-        default='OTHER'
-        )
+        String(32),
+        default="OTHER",
+    )
     category: Mapped[str] = mapped_column(
         String(32),
-        default='REGULAR'
-        )
+        default="REGULAR",
+    )
     start_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        index=True
-        )
+        index=True,
+    )
     end_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True)
-        )
+        DateTime(timezone=True),
+    )
     teacher: Mapped[str | None] = mapped_column(
-        String(255), 
-        nullable=True
-        )
+        String(255),
+        nullable=True,
+    )
     room: Mapped[str | None] = mapped_column(
         String(255),
-        nullable=True
-        )
+        nullable=True,
+    )
     description: Mapped[str | None] = mapped_column(
         Text,
-        nullable=True
-        )
+        nullable=True,
+    )
     content_hash: Mapped[str] = mapped_column(
         String(64),
-        index=True
-        )
+        index=True,
+    )
     google_event_id: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
         unique=True,
-        index=True
-        )
+        index=True,
+    )
     last_synced_content_hash: Mapped[str | None] = mapped_column(
         String(64),
-        nullable=True
-        )
+        nullable=True,
+    )
     raw_ics: Mapped[str | None] = mapped_column(
         Text,
-        nullable=True
-        )
+        nullable=True,
+    )
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.now(timezone.utc)
-        )
+        default=datetime.now(timezone.utc),
+    )
     last_seen_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        default=datetime.now(timezone.utc)
-        )
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc),
+    )
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
-        nullable=True
-        )
+        nullable=True,
+    )
     # Foreign key to User
     user_id: Mapped[int] = mapped_column(
-        ForeignKey('users.id'),
+        ForeignKey("users.id"),
         nullable=False,
-        index=True
-        )
-    user: Mapped['User'] = relationship()
-
+        index=True,
+    )
+    user: Mapped["User"] = relationship()

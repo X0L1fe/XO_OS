@@ -11,7 +11,7 @@ from app.database.db import Database
 from app.database.models import Lesson
 from app.google_calendar.auth import get_google_calendar_service
 from app.ics.parser import LessonData
-from app.sync.diff import LessonChange, DiffResult
+from app.sync.diff import DiffResult, LessonChange
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +21,10 @@ LOCAL_TIMEZONE = ZoneInfo("Europe/Moscow")
 # Mapping from lesson_type to Google Calendar color ID.
 # Leave empty for default color (no colorId set).
 LESSON_TYPE_COLOR_MAP = {
-    "LECTURE": None,   # обычные пары ЛК - нет изменения цвета
-    "PRACTICE": 3,     # ПЗ - глициния (цвет ID 3: Grape)
-    "LAB": 5,          # ЛР - лимон (цвет ID 5: Banana)
-    "EXAM": 11,        # Э - помидор (цвет ID 11: Tomato)
+    "LECTURE": None,  # обычные пары ЛК - нет изменения цвета
+    "PRACTICE": 3,  # ПЗ - глициния (цвет ID 3: Grape)
+    "LAB": 5,  # ЛР - лимон (цвет ID 5: Banana)
+    "EXAM": 11,  # Э - помидор (цвет ID 11: Tomato)
 }
 
 
@@ -90,36 +90,56 @@ def _lesson_to_google_event(lesson: Lesson | LessonData) -> dict:
 
 
 class GoogleCalendarSyncService:
-    def __init__(self, db: Database, calendar_name: str = "primary"):
+    def __init__(
+        self,
+        db: Database,
+        *,
+        calendar_name: str = "primary",
+        user_id: int,
+    ):
         self.db = db
         self.calendar_name = calendar_name
+        self.user_id = user_id
+
         if calendar_name == "primary":
             self.calendar_id = "primary"
         else:
-            # Resolve the calendar name to an ID
             service = get_google_calendar_service()
             calendar_list = service.calendarList().list().execute()
-            for cal in calendar_list.get('items', []):
-                if cal.get('summary') == calendar_name:
-                    self.calendar_id = cal['id']
+
+            for cal in calendar_list.get("items", []):
+                if cal.get("summary") == calendar_name:
+                    self.calendar_id = cal["id"]
                     break
             else:
-                raise ValueError(f"Calendar with name '{calendar_name}' not found in your calendar list.")
+                raise ValueError(
+                    f"Calendar with name '{calendar_name}' "
+                    "not found in your calendar list."
+                )
 
-    def _fetch_google_events(self, service, time_min: datetime | None = None, time_max: datetime | None = None) -> list[dict]:
+    def _fetch_google_events(
+        self,
+        service,
+        time_min: datetime | None = None,
+        time_max: datetime | None = None,
+    ) -> list[dict]:
         """
         Получает события из целевого календаря Google Calendar.
         Возвращает список словарей событий.
         """
         try:
-            events_result = service.events().list(
-                calendarId=self.calendar_id,
-                timeMin=time_min.isoformat() if time_min else None,
-                timeMax=time_max.isoformat() if time_max else None,
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
-            return events_result.get('items', [])
+            events_result = (
+                service.events()
+                .list(
+                    calendarId=self.calendar_id,
+                    timeMin=time_min.isoformat() if time_min else None,
+                    timeMax=time_max.isoformat() if time_max else None,
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
+            return events_result.get("items", [])
         except HttpError as error:
             print(f"Не удалось получить события из Google Calendar: {error}")
             return []
@@ -134,9 +154,9 @@ class GoogleCalendarSyncService:
           но события отсутствуют в календаре.
         """
         # Определяем кодировку консоли для безопасного вывода
-        console_encoding = getattr(sys.stdout, 'encoding', 'utf-8')
+        console_encoding = getattr(sys.stdout, "encoding", "utf-8")
         if console_encoding is None:
-            console_encoding = 'utf-8'
+            console_encoding = "utf-8"
 
         def safe_str(s: str) -> str:
             """Возвращает строку, которую можно безопасно вывести в консоль."""
@@ -147,12 +167,23 @@ class GoogleCalendarSyncService:
                 return s
             except UnicodeEncodeError:
                 # Заменяем непрорисовываемые символы на placeholder
-                return s.encode(console_encoding, errors='replace').decode(console_encoding)
+                return s.encode(console_encoding, errors="replace").decode(
+                    console_encoding
+                )
 
         with self.db.session() as session:
             # Получаем все уроки, у которых есть google_event_id
-            lessons_with_ids = session.query(Lesson).filter(Lesson.google_event_id.isnot(None)).all()
-            lesson_id_to_lesson = {lesson.google_event_id: lesson for lesson in lessons_with_ids}
+            lessons_with_ids = (
+                session.query(Lesson)
+                .filter(
+                    Lesson.user_id == self.user_id,
+                    Lesson.google_event_id.isnot(None),
+                )
+                .all()
+            )
+            lesson_id_to_lesson = {
+                lesson.google_event_id: lesson for lesson in lessons_with_ids
+            }
 
             # Получаем все события из целевого календаря (можно ограничить разумным временным диапазоном)
             # Для простоты получаем все события - в продакшене возможно стоит ограничить по диапазону дат
@@ -163,37 +194,53 @@ class GoogleCalendarSyncService:
 
             # Проверяем каждое событие Google Calendar, соответствует ли оно локальному уроку
             for event in google_events:
-                event_id = event.get('id')
+                event_id = event.get("id")
                 if event_id:
                     seen_google_event_ids.add(event_id)
                     if event_id not in lesson_id_to_lesson:
                         # Найдено событие в Google Calendar, которое не соответствует никакому локальному уроку
-                        event_summary = safe_str(event.get('summary', 'Без названия'))
-                        print(f"[КОНФЛИКТ] Удаляю событие в Google Calendar '{event_summary}' "
-                              f"(ID: {event_id}), т.к. нет соответствующего локального урока.")
+                        event_summary = safe_str(event.get("summary", "Без названия"))
+                        print(
+                            f"[КОНФЛИКТ] Удаляю событие в Google Calendar '{event_summary}' "
+                            f"(ID: {event_id}), т.к. нет соответствующего локального урока."
+                        )
                         # Опционально: извлечь больше деталей для журнала
-                        start = event.get('start', {}).get('dateTime', event.get('start', {}).get('date'))
-                        end = event.get('end', {}).get('dateTime', event.get('end', {}).get('date'))
+                        start = event.get("start", {}).get(
+                            "dateTime", event.get("start", {}).get("date")
+                        )
+                        end = event.get("end", {}).get(
+                            "dateTime", event.get("end", {}).get("date")
+                        )
                         print(f"       Время: {start} по {end}")
                         try:
-                            service.events().delete(calendarId=self.calendar_id, eventId=event_id).execute()
+                            service.events().delete(
+                                calendarId=self.calendar_id, eventId=event_id
+                            ).execute()
                             print(f"       Событие {event_id} успешно удалено.")
                         except HttpError as error:
-                            print(f"       Не удалось удалить событие {event_id}: {error}")
+                            print(
+                                f"       Не удалось удалить событие {event_id}: {error}"
+                            )
 
             # Проверяем уроки, у которых есть google_event_id, но события нет в Google Calendar
             for google_event_id, lesson in lesson_id_to_lesson.items():
                 if google_event_id not in seen_google_event_ids:
                     # Урок считает, что имеет соответствующее событие в Google Calendar, но мы его не нашли
                     lesson_subject = safe_str(lesson.subject)
-                    print(f"[КОНФЛИКТ] Создаю/обновляю событие в Google Calendar для урока '{lesson_subject}' "
-                          f"(ID: {lesson.id}) с google_event_id {google_event_id}, т.к. событие отсутствует.")
-                    print(f"       Время урока: {lesson.start_time} по {lesson.end_time}")
+                    print(
+                        f"[КОНФЛИКТ] Создаю/обновляю событие в Google Calendar для урока '{lesson_subject}' "
+                        f"(ID: {lesson.id}) с google_event_id {google_event_id}, т.к. событие отсутствует."
+                    )
+                    print(
+                        f"       Время урока: {lesson.start_time} по {lesson.end_time}"
+                    )
                     try:
                         self.sync_lesson(lesson)
                         print(f"       Синхронизация урока {lesson.id} завершена.")
                     except Exception as error:
-                        print(f"       Не удалось синхронизировать урок {lesson.id}: {error}")
+                        print(
+                            f"       Не удалось синхронизировать урок {lesson.id}: {error}"
+                        )
 
     def sync_changes(self, diff: DiffResult) -> None:
         """
@@ -210,7 +257,6 @@ class GoogleCalendarSyncService:
         # Сначала обнаруживаем и логируем любые конфликты между локальными уроками и событиями Google Calendar
         self._detect_and_handle_conflicts(service)
 
-        
         # Process created lessons: create new events.
         for change in diff.created:
             assert change.new is not None
@@ -219,37 +265,73 @@ class GoogleCalendarSyncService:
             try:
                 # Avoid duplicate creation if google_event_id already exists (should not happen in created diff)
                 with self.db.session() as session:
-                    lesson = session.query(Lesson).filter(Lesson.stable_id == lesson_data.identity_key).first()
+                    lesson = (
+                        session.query(Lesson)
+                        .filter(
+                            Lesson.user_id == self.user_id,
+                            Lesson.stable_id == lesson_data.identity_key,
+                        )
+                        .first()
+                    )
                     if lesson and lesson.google_event_id:
-                        print(f"Пропущено создание события для {lesson_data.subject}: уже существует google_event_id {lesson.google_event_id}")
+                        print(
+                            f"Пропущено создание события для {lesson_data.subject}: уже существует google_event_id {lesson.google_event_id}"
+                        )
                         continue
 
-                created_event = service.events().insert(calendarId=self.calendar_id, body=event).execute()
+                created_event = (
+                    service.events()
+                    .insert(calendarId=self.calendar_id, body=event)
+                    .execute()
+                )
                 google_event_id = created_event.get("id")
-                print(f"Создано событие Google {created_event.get('id')} для {lesson_data.subject}")
+                print(
+                    f"Создано событие Google {created_event.get('id')} для {lesson_data.subject}"
+                )
                 # Update the lesson in DB with the Google event ID and last synced content hash.
                 with self.db.session() as session:
                     # Find the lesson by stable_id (identity_key) that was just created.
                     # The lesson should already be in the DB after the import_ics step.
-                    lesson = session.query(Lesson).filter(Lesson.stable_id == lesson_data.identity_key).first()
+                    lesson = (
+                        session.query(Lesson)
+                        .filter(
+                            Lesson.user_id == self.user_id,
+                            Lesson.stable_id == lesson_data.identity_key,
+                        )
+                        .first()
+                    )
                     if lesson:
                         lesson.google_event_id = google_event_id
                         lesson.last_synced_content_hash = lesson_data.content_hash
                         session.commit()
             except HttpError as error:
-                print(f"Не удалось создать событие в Google Calendar для {lesson_data.subject}: {error}")
+                print(
+                    f"Не удалось создать событие в Google Calendar для {lesson_data.subject}: {error}"
+                )
 
         # Process updated lessons: update existing events.
         for change in diff.updated:
             assert change.old is not None and change.new is not None
             lesson_data = change.new
             with self.db.session() as session:
-                lesson = session.query(Lesson).filter(Lesson.stable_id == lesson_data.identity_key).first()
+                lesson = (
+                    session.query(Lesson)
+                    .filter(
+                        Lesson.user_id == self.user_id,
+                        Lesson.stable_id == lesson_data.identity_key,
+                    )
+                    .first()
+                )
                 event = _lesson_to_google_event(lesson_data)
                 if lesson and lesson.google_event_id:
                     # Skip update if content hasn't changed since last sync.
-                    if lesson.last_synced_content_hash is not None and lesson.content_hash == lesson.last_synced_content_hash:
-                        print(f"Пропущено обновление события для {lesson_data.subject}: содержимое не изменилось с последней синхронизации.")
+                    if (
+                        lesson.last_synced_content_hash is not None
+                        and lesson.content_hash == lesson.last_synced_content_hash
+                    ):
+                        print(
+                            f"Пропущено обновление события для {lesson_data.subject}: содержимое не изменилось с последней синхронизации."
+                        )
                     else:
                         try:
                             service.events().update(
@@ -257,7 +339,9 @@ class GoogleCalendarSyncService:
                                 eventId=lesson.google_event_id,
                                 body=event,
                             ).execute()
-                            print(f"Обновлено событие Google {lesson.google_event_id} для {lesson_data.subject}")
+                            print(
+                                f"Обновлено событие Google {lesson.google_event_id} для {lesson_data.subject}"
+                            )
                             # Update last_synced_at and last_synced_content_hash after successful update.
                             lesson.last_synced_at = datetime.now(timezone.utc)
                             lesson.last_synced_content_hash = lesson_data.content_hash
@@ -267,20 +351,30 @@ class GoogleCalendarSyncService:
                                 # Event not found in target calendar, fall through to create
                                 pass
                             else:
-                                print(f"Не удалось обновить событие в Google Calendar для {lesson_data.subject}: {error}")
+                                print(
+                                    f"Не удалось обновить событие в Google Calendar для {lesson_data.subject}: {error}"
+                                )
                 # Either no google_event_id, or update failed with 404 (event not found in target calendar)
                 if not (lesson and lesson.google_event_id):
                     try:
-                        created_event = service.events().insert(calendarId=self.calendar_id, body=event).execute()
+                        created_event = (
+                            service.events()
+                            .insert(calendarId=self.calendar_id, body=event)
+                            .execute()
+                        )
                         google_event_id = created_event.get("id")
-                        print(f"Создано событие Google {created_event.get('id')} для {lesson_data.subject}")
+                        print(
+                            f"Создано событие Google {created_event.get('id')} для {lesson_data.subject}"
+                        )
                         if lesson:
                             lesson.google_event_id = google_event_id
                             lesson.last_synced_at = datetime.now(timezone.utc)
                             lesson.last_synced_content_hash = lesson_data.content_hash
                             session.commit()
                     except HttpError as error:
-                        print(f"Не удалось создать событие в Google Calendar для {lesson_data.subject}: {error}")
+                        print(
+                            f"Не удалось создать событие в Google Calendar для {lesson_data.subject}: {error}"
+                        )
 
         # Process moved lessons: same as updated (time changed) but we already handle via update.
         # The diff already separates moved, but the Google Calendar event update will handle time change.
@@ -288,12 +382,24 @@ class GoogleCalendarSyncService:
             assert change.old is not None and change.new is not None
             lesson_data = change.new
             with self.db.session() as session:
-                lesson = session.query(Lesson).filter(Lesson.stable_id == lesson_data.identity_key).first()
+                lesson = (
+                    session.query(Lesson)
+                    .filter(
+                        Lesson.user_id == self.user_id,
+                        Lesson.stable_id == lesson_data.identity_key,
+                    )
+                    .first()
+                )
                 event = _lesson_to_google_event(lesson_data)
                 if lesson and lesson.google_event_id:
                     # Skip update if content hasn't changed since last sync.
-                    if lesson.last_synced_content_hash is not None and lesson.content_hash == lesson.last_synced_content_hash:
-                        print(f"Пропущено обновление события для {lesson_data.subject}: содержимое не изменилось с последней синхронизации.")
+                    if (
+                        lesson.last_synced_content_hash is not None
+                        and lesson.content_hash == lesson.last_synced_content_hash
+                    ):
+                        print(
+                            f"Пропущено обновление события для {lesson_data.subject}: содержимое не изменилось с последней синхронизации."
+                        )
                     else:
                         try:
                             service.events().update(
@@ -301,7 +407,9 @@ class GoogleCalendarSyncService:
                                 eventId=lesson.google_event_id,
                                 body=event,
                             ).execute()
-                            print(f"Обновлено событие Google {lesson.google_event_id} для {lesson_data.subject}")
+                            print(
+                                f"Обновлено событие Google {lesson.google_event_id} для {lesson_data.subject}"
+                            )
                             # Update last_synced_at and last_synced_content_hash after successful update.
                             lesson.last_synced_at = datetime.now(timezone.utc)
                             lesson.last_synced_content_hash = lesson_data.content_hash
@@ -311,21 +419,31 @@ class GoogleCalendarSyncService:
                                 # Event not found in target calendar, fall through to create
                                 pass
                             else:
-                                print(f"Не удалось переместить событие в Google Calendar для {lesson_data.subject}: {error}")
+                                print(
+                                    f"Не удалось переместить событие в Google Calendar для {lesson_data.subject}: {error}"
+                                )
                 # Either no google_event_id, or update failed with 404 (event not found in target calendar)
                 if not (lesson and lesson.google_event_id):
                     event = _lesson_to_google_event(lesson_data)
                     try:
-                        created_event = service.events().insert(calendarId=self.calendar_id, body=event).execute()
+                        created_event = (
+                            service.events()
+                            .insert(calendarId=self.calendar_id, body=event)
+                            .execute()
+                        )
                         google_event_id = created_event.get("id")
-                        print(f"Создано событие Google {created_event.get('id')} для {lesson_data.subject}")
+                        print(
+                            f"Создано событие Google {created_event.get('id')} для {lesson_data.subject}"
+                        )
                         if lesson:
                             lesson.google_event_id = google_event_id
                             lesson.last_synced_at = datetime.now(timezone.utc)
                             lesson.last_synced_content_hash = lesson_data.content_hash
                             session.commit()
                     except HttpError as error:
-                        print(f"Не удалось создать событие в Google Calendar для {lesson_data.subject}: {error}")
+                        print(
+                            f"Не удалось создать событие в Google Calendar для {lesson_data.subject}: {error}"
+                        )
 
         # Process deleted lessons: delete events.
         for change in diff.deleted:
@@ -333,7 +451,14 @@ class GoogleCalendarSyncService:
             lesson = change.old
             with self.db.session() as session:
                 # Re-fetch to ensure we have the google_event_id.
-                lesson_db = session.query(Lesson).filter(Lesson.id == lesson.id).first()
+                lesson_db = (
+                    session.query(Lesson)
+                    .filter(
+                        Lesson.id == lesson.id,
+                        Lesson.user_id == self.user_id,
+                    )
+                    .first()
+                )
                 if lesson_db and lesson_db.google_event_id:
                     try:
                         service.events().delete(
@@ -346,32 +471,49 @@ class GoogleCalendarSyncService:
                         lesson_db.last_synced_at = datetime.now(timezone.utc)
                         session.commit()
                     except HttpError as error:
-                        print(f"Не удалось удалить событие в Google Calendar для {lesson.subject}: {error}")
+                        print(
+                            f"Не удалось удалить событие в Google Calendar для {lesson.subject}: {error}"
+                        )
 
         # Process unchanged lessons that lack Google event ID: create them.
         for change in diff.unchanged:
             assert change.old is not None and change.new is not None
             lesson_data = change.new
             with self.db.session() as session:
-                lesson = session.query(Lesson).filter(Lesson.stable_id == lesson_data.identity_key).first()
+                lesson = (
+                    session.query(Lesson)
+                    .filter(
+                        Lesson.user_id == self.user_id,
+                        Lesson.stable_id == lesson_data.identity_key,
+                    )
+                    .first()
+                )
                 if lesson and lesson.google_event_id is None:
                     event = _lesson_to_google_event(lesson_data)
                     try:
-                        created_event = service.events().insert(calendarId=self.calendar_id, body=event).execute()
+                        created_event = (
+                            service.events()
+                            .insert(calendarId=self.calendar_id, body=event)
+                            .execute()
+                        )
                         google_event_id = created_event.get("id")
-                        print(f"Создано событие Google {created_event.get('id')} для {lesson_data.subject} (was missing ID)")
+                        print(
+                            f"Создано событие Google {created_event.get('id')} для {lesson_data.subject} (was missing ID)"
+                        )
                         if lesson:
                             lesson.google_event_id = google_event_id
                             lesson.last_synced_at = datetime.now(timezone.utc)
                             lesson.last_synced_content_hash = lesson_data.content_hash
                             session.commit()
                     except HttpError as error:
-                        print(f"Не удалось создать событие в Google Calendar для {lesson_data.subject}: {error}")
+                        print(
+                            f"Не удалось создать событие в Google Calendar для {lesson_data.subject}: {error}"
+                        )
 
     def sync_lesson(self, lesson: Lesson) -> None:
         """
-        Sync a single lesson to Google Calendar (create or update).
-        Used for initial sync or when a lesson is modified outside of ICS import.
+        Синхронизируйте один урок с Календарем Google (создайте или обновите).
+        Используется для начальной синхронизации или при изменении урока вне импорта ICS.
         """
         try:
             service = get_google_calendar_service()
@@ -380,7 +522,14 @@ class GoogleCalendarSyncService:
             return
 
         with self.db.session() as session:
-            lesson_db = session.query(Lesson).filter(Lesson.id == lesson.id).first()
+            lesson_db = (
+                session.query(Lesson)
+                .filter(
+                    Lesson.id == lesson.id,
+                    Lesson.user_id == self.user_id,
+                )
+                .first()
+            )
             if not lesson_db:
                 return
 
@@ -397,15 +546,25 @@ class GoogleCalendarSyncService:
                     lesson_db.last_synced_content_hash = lesson_db.content_hash
                     session.commit()
                 except HttpError as error:
-                    print(f"Не удалось обновить событие в Google Calendar для {lesson_db.subject}: {error}")
+                    print(
+                        f"Не удалось обновить событие в Google Calendar для {lesson_db.subject}: {error}"
+                    )
             else:
                 try:
-                    created_event = service.events().insert(calendarId=self.calendar_id, body=event).execute()
+                    created_event = (
+                        service.events()
+                        .insert(calendarId=self.calendar_id, body=event)
+                        .execute()
+                    )
                     google_event_id = created_event.get("id")
-                    print(f"Создано событие Google {created_event.get('id')} для {lesson_db.subject}")
+                    print(
+                        f"Создано событие Google {created_event.get('id')} для {lesson_db.subject}"
+                    )
                     lesson_db.google_event_id = google_event_id
                     lesson_db.last_synced_at = datetime.now(timezone.utc)
                     lesson_db.last_synced_content_hash = lesson_db.content_hash
                     session.commit()
                 except HttpError as error:
-                    print(f"Не удалось создать событие в Google Calendar для {lesson_db.subject}: {error}")
+                    print(
+                        f"Не удалось создать событие в Google Calendar для {lesson_db.subject}: {error}"
+                    )
