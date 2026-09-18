@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
+import httpx
 from fastapi import (
     Body,
     Cookie,
@@ -26,6 +28,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from google.auth.transport.requests import Request as GoogleRequest
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.auth.schemas import AuthStatusResponse, UserCreate, UserLogin, UserResponse
 from app.auth.service import (
@@ -47,9 +50,15 @@ from app.auth.service import (
 )
 from app.config import Settings
 from app.database.db import Database
-from app.database.models import Lesson, Session, User, UserStats
+from app.database.models import Lesson, Notification, User, UserStats
 from app.email.service import EmailService
-from app.mais_parser import fetch_group_schedule, fetch_groups, parse_mais_schedule
+from app.mais_parser import (
+    async_fetch_group_schedule,
+    async_fetch_groups,
+    fetch_group_schedule,
+    fetch_groups,
+    parse_mais_schedule,
+)
 from app.sync.service import SyncService
 from app.telegram.schemas import (
     TelegramLinkResponse,
@@ -65,12 +74,13 @@ from app.telegram.service import (
 try:
     from google_auth_oauthlib.flow import Flow
 
-    from app.google_calendar.auth import SCOPES, get_credentials_path, get_token_path
+    from app.google_calendar.auth import SCOPES, get_credentials_path, get_token_path, get_google_calendar_service
     from app.google_calendar.service import GoogleCalendarSyncService
 
     GOOGLE_OAUTH_AVAILABLE = True
 except ImportError:
     GoogleCalendarSyncService = None
+    get_google_calendar_service = None
     GOOGLE_OAUTH_AVAILABLE = False
 
 app = FastAPI(title="XO_OS", version="0.1.0")
@@ -929,7 +939,9 @@ def get_mais_groups():
 
 
 @app.post("/api/mais/import")
-def import_mais_schedule(group_name: str = Form(...)):
+def import_mais_schedule(
+    group_name: str = Form(...), current_user: User = Depends(get_current_active_user)
+):
     """Import schedule for a given MAIS group name."""
     try:
         # Fetch schedule JSON
@@ -937,8 +949,26 @@ def import_mais_schedule(group_name: str = Form(...)):
         # Parse into LessonData
         lessons = parse_mais_schedule(json_bytes, group_name=group_name)
         # Import using SyncService
-        sync_service = SyncService(db)
-        result = sync_service.import_lesson_data(lessons)
+        # Try to create Google Calendar service if user has selected a calendar and is authenticated
+        google_calendar_service = None
+        try:
+            # Check if the user has a selected calendar (not the default? but we always have one)
+            # and if we can authenticate with Google Calendar
+            if current_user.selected_calendar_id:
+                google_calendar_service = GoogleCalendarSyncService(
+                    db,
+                    calendar_id=current_user.selected_calendar_id,
+                    user_id=current_user.id,
+                )
+        except Exception as e:
+            # If we fail to create the service, log it and continue without Google Calendar sync
+            print(f"Failed to initialize Google Calendar service: {e}")
+            google_calendar_service = None
+
+        sync_service = SyncService(db, google_calendar_service=google_calendar_service)
+        result = sync_service.import_lesson_data(
+            lessons, user_id=current_user.id, mais_group_id=group_name
+        )
         return {
             "status": "success",
             "group": group_name,
@@ -953,6 +983,120 @@ def import_mais_schedule(group_name: str = Form(...)):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to import schedule for group '{group_name}': {e}",
+        )
+
+
+@app.post("/api/mais/group")
+def set_mais_group(
+    group_name: str = Form(...), current_user: User = Depends(get_current_active_user)
+):
+    """Set the MAIS group for the current user."""
+    # Optionally, you could validate that the group exists by calling fetch_groups() and checking.
+    # For now, we just save the group name.
+    with db.session() as session:
+        user = session.query(User).filter(User.id == current_user.id).one()
+        user.mais_group_id = group_name
+        user.onboarding_completed = True
+        session.commit()
+    return {"status": "success", "group": group_name}
+
+
+@app.get("/api/google/calendars")
+async def get_google_calendars(
+    current_user: User = Depends(get_current_active_user),
+):
+    """Get list of user's Google Calendars."""
+    if not GOOGLE_OAUTH_AVAILABLE or get_google_calendar_service is None:
+        # Return default primary calendar if Google OAuth is not available
+        return {
+            "calendars": [
+                {"id": "primary", "summary": "Основной календарь"}
+            ],
+            "requires_auth": False
+        }
+    try:
+        # Check if user has Google credentials
+        token_path = get_token_path()
+        if not os.path.exists(token_path):
+            # No token file, user not authenticated with Google
+            return {
+                "calendars": [
+                    {"id": "primary", "summary": "Основной календарь"}
+                ],
+                "requires_auth": True
+            }
+
+        # Try to get the service
+        service = get_google_calendar_service()
+        calendar_list = service.calendarList().list().execute()
+        calendars = []
+        for calendar in calendar_list.get("items", []):
+            calendars.append({
+                "id": calendar["id"],
+                "summary": calendar.get("summary", "Без названия")
+            })
+        # Always include primary calendar as fallback
+        if not any(cal["id"] == "primary" for cal in calendars):
+            calendars.append({"id": "primary", "summary": "Основной календарь"})
+        return {"calendars": calendars, "requires_auth": False}
+    except Exception as e:
+        # If there's an error (e.g., not authenticated), return default with auth required
+        return {
+            "calendars": [
+                {"id": "primary", "summary": "Основной календарь"}
+            ],
+            "requires_auth": True
+        }
+
+
+@app.post("/api/onboarding/complete")
+async def complete_onboarding(
+    request: Request, current_user: User = Depends(get_current_active_user)
+):
+    """Complete onboarding by saving group and calendar selection."""
+    try:
+        data = await request.json()
+        group_name = data.get("group_name")
+        calendar_id = data.get("calendar_id", "primary")
+
+        if not group_name:
+            raise HTTPException(status_code=400, detail="Group name is required")
+
+        with db.session() as session:
+            user = session.query(User).filter(User.id == current_user.id).one()
+            user.mais_group_id = group_name
+            user.selected_calendar_id = calendar_id
+            user.onboarding_completed = True
+            session.commit()
+        return {"status": "success"}
+    except Exception as e:
+        # Log the error for debugging
+        print(f"Error in complete_onboarding: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to complete onboarding: {str(e)}"
+        )
+
+
+@app.post("/api/google/calendar/select")
+async def select_google_calendar(
+    request: Request, current_user: User = Depends(get_current_active_user)
+):
+    """Save the user's selected Google Calendar ID for synchronization."""
+    try:
+        data = await request.json()
+        calendar_id = data.get("calendar_id")
+
+        with db.session() as session:
+            user = session.query(User).filter(User.id == current_user.id).one()
+            user.selected_calendar_id = calendar_id if calendar_id else None
+            session.commit()
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Error in select_google_calendar: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save calendar selection: {str(e)}"
         )
 
 
@@ -1053,8 +1197,8 @@ async def google_callback(request: Request):
 
 
 @app.get("/api/google/status")
-async def google_status():
-    """Check Google connection status."""
+async def google_status(current_user: User = Depends(get_current_user)):
+    """Check Google connection status and last sync time."""
     if not GOOGLE_OAUTH_AVAILABLE:
         return {"connected": False, "error": "Google OAuth not available"}
     try:
@@ -1064,7 +1208,7 @@ async def google_status():
 
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
             if creds and creds.valid:
-                return {"connected": True}
+                return {"connected": True, "last_synced_at": current_user.last_synced_at.isoformat() if current_user.last_synced_at else None}
             elif creds and creds.expired and creds.refresh_token:
                 # Try to refresh
                 from google.auth.transport.requests import Request
@@ -1073,10 +1217,10 @@ async def google_status():
                 # Save refreshed token
                 with open(token_path, "w") as token_file:
                     token_file.write(creds.to_json())
-                return {"connected": True}
-        return {"connected": False}
+                return {"connected": True, "last_synced_at": current_user.last_synced_at.isoformat() if current_user.last_synced_at else None}
+        return {"connected": False, "last_synced_at": None}
     except Exception:
-        return {"connected": False}
+        return {"connected": False, "last_synced_at": None}
 
 
 @app.post("/api/google/disconnect")
@@ -1190,7 +1334,213 @@ async def telegram_unlink(
     )
 
 
+# Notification endpoints
+@app.get("/api/notifications")
+async def get_notifications(
+    current_user: User = Depends(get_current_active_user),
+) -> list[dict]:
+    """
+    Get notifications for the current user.
+    Returns a list of notifications sorted by creation date (newest first).
+    """
+    with db.session() as session:
+        notifications = (
+            session.query(Notification)
+            .filter(Notification.user_id == current_user.id)
+            .order_by(Notification.created_at.desc())
+            .all()
+        )
+        return [
+            {
+                "id": n.id,
+                "title": n.title,
+                "message": n.message,
+                "is_read": bool(n.is_read),
+                "type": n.type,
+                "related_id": n.related_id,
+                "related_type": n.related_type,
+                "created_at": n.created_at.isoformat(),
+            }
+            for n in notifications
+        ]
+
+
+@app.post("/api/notifications/{notification_id}/read")
+async def mark_notification_as_read(
+    notification_id: int,
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, bool]:
+    """
+    Mark a notification as read.
+    """
+    with db.session() as session:
+        notification = (
+            session.query(Notification)
+            .filter(
+                Notification.id == notification_id,
+                Notification.user_id == current_user.id,
+            )
+            .first()
+        )
+        if not notification:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        notification.is_read = True
+        session.commit()
+        return {"success": True}
+
+
+@app.post("/api/notifications/toggle")
+async def toggle_notifications_enabled(
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, bool]:
+    """
+    Toggle notifications enabled for the current user.
+    """
+    with db.session() as session:
+        user = session.query(User).filter(User.id == current_user.id).one()
+        user.notifications_enabled = not user.notifications_enabled
+        session.commit()
+        return {"enabled": bool(user.notifications_enabled)}
+
+
 # Trigger reload
+
+
+# Background task for periodic MAIS schedule checking
+async def check_mais_schedule_for_user(user: User, session: Session) -> None:
+    """
+    Check for schedule changes for a specific user and create notifications if changes are found.
+    """
+    try:
+        # Fetch schedule JSON from MAIS
+        json_bytes = await async_fetch_group_schedule(user.mais_group_id)
+        # Parse into LessonData
+        lessons = parse_mais_schedule(json_bytes, group_name=user.mais_group_id)
+        # Import using SyncService (this will sync with Google Calendar and return a DiffResult)
+        # Try to create Google Calendar service if user has selected a calendar and is authenticated
+        google_calendar_service = None
+        try:
+            # Check if the user has a selected calendar (not the default? but we always have one)
+            # and if we can authenticate with Google Calendar
+            if user.selected_calendar_id:
+                google_calendar_service = GoogleCalendarSyncService(
+                    db,
+                    calendar_id=user.selected_calendar_id,
+                    user_id=user.id,
+                )
+        except Exception as e:
+            # If we fail to create the service, log it and continue without Google Calendar sync
+            print(f"Failed to initialize Google Calendar service for user {user.id}: {e}")
+            google_calendar_service = None
+
+        sync_service = SyncService(db, google_calendar_service=google_calendar_service)
+        result = sync_service.import_lesson_data(
+            lessons, user_id=user.id, mais_group_id=user.mais_group_id
+        )
+        # If we have a Google Calendar service, update the last synced time
+        if google_calendar_service is not None:
+            user.last_synced_at = datetime.now(timezone.utc)
+        # Check if there are any changes
+        has_changes = (
+            result.created > 0
+            or result.updated > 0
+            or result.moved > 0
+            or result.deleted > 0
+        )
+        if has_changes:
+            # Prepare notification message
+            message_parts = []
+            if result.created:
+                message_parts.append(f"добавлено: {result.created}")
+            if result.updated:
+                message_parts.append(f"обновлено: {result.updated}")
+            if result.moved:
+                message_parts.append(f"перемещено: {result.moved}")
+            if result.deleted:
+                message_parts.append(f"удалено: {result.deleted}")
+            message = "Изменения в расписании: " + ", ".join(message_parts)
+            # Create notification
+            notification = Notification(
+                user_id=user.id,
+                title="Изменения в расписании",
+                message=message,
+                type="schedule_change",
+            )
+            session.add(notification)
+            # Send Telegram notification if user has Telegram linked and notifications are enabled
+            if user.telegram_id is not None and user.notifications_enabled:
+                try:
+                    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+                    if telegram_token:
+                        telegram_url = (
+                            f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+                        )
+                        payload = {
+                            "chat_id": user.telegram_id,
+                            "text": f"🔔 {notification.title}\n{notification.message}",
+                        }
+                        async with httpx.AsyncClient() as client:
+                            await client.post(telegram_url, json=payload)
+                except Exception as e:
+                    # Log error but don't break the flow
+                    print(f"Failed to send Telegram notification: {e}")
+    except Exception as e:
+        # Log error but don't break the background task
+        print(f"Error checking MAIS schedule for user {user.id}: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+
+async def periodic_mais_check():
+    """
+    Background task that periodically checks for MAIS schedule changes for all users.
+    """
+    interval = 3600  # seconds (1 hour)
+    while True:
+        try:
+            # Get all users that have a mais_group_id and notifications enabled
+            with db.session() as session:
+                users = (
+                    session.query(User)
+                    .filter(
+                        User.mais_group_id.isnot(None),
+                        User.notifications_enabled == True,
+                    )
+                    .all()
+                )
+            # For each user, check if it's time to check
+            for user in users:
+                # We'll open a new session for each user to avoid holding a long session
+                with db.session() as session:
+                    # Re-fetch the user in this session to get the latest state
+                    user_db = session.query(User).filter(User.id == user.id).one()
+                    # Check if we need to run the check
+                    now = datetime.now(timezone.utc)
+                    if (
+                        user_db.last_mais_check is None
+                        or (now - user_db.last_mais_check).total_seconds() >= interval
+                    ):
+                        # Perform the check
+                        await check_mais_schedule_for_user(user_db, session)
+                        # Update the last check time
+                        user_db.last_mais_check = now
+                        # Commit the session (notification and last_mais_check)
+                        session.commit()
+        except Exception as e:
+            # Log the error and continue
+            print(f"Error in periodic MAIS check: {e}")
+            import traceback
+
+            traceback.print_exc()
+        # Wait for the next interval
+        await asyncio.sleep(interval)
+
+
+# Startup event to launch the background task
+@app.on_event("startup")
+async def start_background_tasks():
+    asyncio.create_task(periodic_mais_check())
 
 
 # Catch-all route for serving frontend (if exists)

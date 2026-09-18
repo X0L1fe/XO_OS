@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import List
 
 from sqlalchemy import (
     BigInteger,
@@ -103,6 +104,33 @@ class User(Base):
         index=True,
     )
     telegram_linked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    # MAIS group ID (the group name or identifier from MAIS API)
+    mais_group_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    # Selected Google Calendar ID for synchronization
+    selected_calendar_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    # Whether notifications for schedule changes are enabled
+    notifications_enabled: Mapped[bool] = mapped_column(
+        Integer,
+        default=1,
+    )  # using Integer for boolean compatibility with SQLite
+    # Last time we checked for MAIS schedule changes
+    last_mais_check: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    # List of notifications for this user
+    notifications: Mapped[List["Notification"]] = relationship(back_populates="user")
+    # Last time we successfully synchronized with Google Calendar
+    last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
@@ -215,6 +243,52 @@ class Session(Base):
     user: Mapped["User"] = relationship()
 
 
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+    message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    is_read: Mapped[bool] = mapped_column(
+        Integer,
+        default=0,
+    )  # using Integer for boolean compatibility with SQLite
+    type: Mapped[str] = mapped_column(
+        String(50),
+        default="info",
+    )  # e.g., "schedule_change", "system", "reminder"
+    related_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )  # ID of related entity (e.g., lesson ID)
+    related_type: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )  # Type of related entity (e.g., "lesson")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc),
+    )
+
+    # Relationship to User
+    user: Mapped["User"] = relationship(back_populates="notifications")
+
+
 class Lesson(Base):
     __tablename__ = "lessons"
 
@@ -290,6 +364,11 @@ class Lesson(Base):
     )
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
+        nullable=True,
+    )
+    # MAIS group ID (the group name or identifier from MAIS API) for this lesson
+    mais_group_id: Mapped[str | None] = mapped_column(
+        String(255),
         nullable=True,
     )
     # Foreign key to User

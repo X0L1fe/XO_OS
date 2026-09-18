@@ -8,7 +8,7 @@ from typing import Optional, Protocol
 from sqlalchemy import select
 
 from app.database.db import Database
-from app.database.models import Lesson, UserStats
+from app.database.models import Lesson, User, UserStats
 from app.ics.parser import LessonData, parse_ics
 from app.sync.diff import DiffResult, LessonChange, calculate_diff
 
@@ -42,6 +42,7 @@ def _apply_lesson_data(
     data: LessonData,
     *,
     now: datetime,
+    mais_group_id: Optional[str] = None,
 ) -> None:
     """
     Обновляет существующую БД-запись данными из ICS.
@@ -64,6 +65,7 @@ def _apply_lesson_data(
     lesson.raw_ics = data.raw_ics
 
     lesson.last_seen_at = now
+    lesson.mais_group_id = mais_group_id
 
 
 def _create_lesson(
@@ -71,6 +73,7 @@ def _create_lesson(
     *,
     now: datetime,
     user_id: int,
+    mais_group_id: Optional[str] = None,
 ) -> Lesson:
     return Lesson(
         stable_id=data.identity_key,
@@ -95,6 +98,7 @@ def _create_lesson(
         last_seen_at=now,
 
         user_id=user_id,
+        mais_group_id=mais_group_id,
     )
 
 
@@ -152,6 +156,9 @@ class SyncService:
         }
 
         with self.db.session() as session:
+            # Get the user's MAIS group ID
+            user_obj = session.query(User).filter(User.id == user_id).one()
+            mais_group_id = user_obj.mais_group_id
             # ВАЖНО:
             #
             # Смотрим только диапазон дат текущего ICS.
@@ -204,6 +211,7 @@ class SyncService:
                         change.new,
                         now=now,
                         user_id=user_id,
+                        mais_group_id=mais_group_id,
                     )
                 )
 
@@ -219,6 +227,7 @@ class SyncService:
                     change.old,
                     change.new,
                     now=now,
+                    mais_group_id=mais_group_id,
                 )
 
             # -------------------------------------------------
@@ -236,11 +245,12 @@ class SyncService:
                 # Меняем её содержимое и stable_id.
                 #
                 # Благодаря этому в будущем calendar_events
-                # продолжит ссылаться на тот же lesson.id.
+                # продолжится ссылаться на тот же lesson.id.
                 _apply_lesson_data(
                     change.old,
                     change.new,
                     now=now,
+                    mais_group_id=mais_group_id,
                 )
 
             # -------------------------------------------------
@@ -420,6 +430,7 @@ class SyncService:
         *,
         user_id: int,
         include_military: bool = False,
+        mais_group_id: Optional[str] = None,
     ) -> SyncResult:
         """
         Import a list of LessonData objects (parsed from MAIS schedule or other source).
@@ -497,6 +508,7 @@ class SyncService:
                         change.new,
                         now=now,
                         user_id=user_id,
+                        mais_group_id=mais_group_id,
                     )
                 )
 
@@ -508,6 +520,7 @@ class SyncService:
                     change.old,
                     change.new,
                     now=now,
+                    mais_group_id=mais_group_id,
                 )
 
             # MOVED
@@ -518,6 +531,7 @@ class SyncService:
                     change.old,
                     change.new,
                     now=now,
+                    mais_group_id=mais_group_id,
                 )
 
             # UNCHANGED

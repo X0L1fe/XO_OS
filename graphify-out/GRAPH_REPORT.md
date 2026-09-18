@@ -1,51 +1,51 @@
 # Graph Report - MAISync  (2026-09-18)
 
 ## Corpus Check
-- 73 files · ~116,040 words
+- 75 files · ~119,873 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 940 nodes · 2440 edges · 73 communities (64 shown, 9 thin omitted)
-- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 195 edges (avg confidence: 0.52)
+- 989 nodes · 2505 edges · 64 communities (54 shown, 10 thin omitted)
+- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 194 edges (avg confidence: 0.51)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `37c73ce7`
+- Built from commit: `beb7f6fc`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- LessonData
-- l
-- main.74f1fbe2.js
-- i
-- App.js
-- parse_ics
-- telegram/service.py
-- main.py
 - forEach
-- enterface.md
-- zd
-- auth/service.py
-- Lesson
-- dependencies
-- n
-- mais_parser.py
-- create_user
-- ss
-- Database
-- post
-- Xn
-- package.json
+- main.6f61398d.js
 - s
+- ms
+- App.js
+- LessonData
+- telegram/service.py
+- User
+- rd
+- enterface.md
+- ss
+- main.py
+- get_google_calendar_service
+- dependencies
+- l
+- mais_parser.py
+- ObsidianPath
+- Changes Made for MAIS Schedule Parser Layer
+- Database
+- nu
+- Выполненные изменения бэкенда
+- package.json
+- Da
 - devDependencies
 - development
 - web/manifest.json
 - User Guide
 - public/manifest.json
-- rd
-- EmailService
-- Xu
+- telegram_link
+- ._render_template
+- Frontend Fixes for XO_OS
 - scripts
 - extends
 - MAISync
@@ -56,146 +56,137 @@
 - TODO
 - README
 - WEB
-- nu
-- ms
+- nr
 - Learn More
-- diff.py
-- calculate_diff
 - Решение проблемы дублирования в Telegram боте
-- Da
 - Usage
 - Анализ дублирования событий в Google Calendar
 - Telegram Bot for XO_OS
 - Исправлено дублирование событий в Google Calendar
-- fi
 - xo_os
-- export_to_obsidian
-- models.py
 - Fixes Applied
-- hc
-- ls
 - react-scripts
 
 ## God Nodes (most connected - your core abstractions)
-1. `l()` - 72 edges
-2. `s()` - 61 edges
-3. `n()` - 50 edges
+1. `l()` - 74 edges
+2. `s()` - 63 edges
+3. `n()` - 49 edges
 4. `ss()` - 44 edges
-5. `User` - 33 edges
+5. `User` - 43 edges
 6. `i()` - 32 edges
 7. `hl()` - 29 edges
 8. `rd()` - 27 edges
-9. `Database` - 25 edges
-10. `LessonData` - 25 edges
+9. `LessonData` - 25 edges
+10. `Database` - 24 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `test_password_hash()` --calls--> `get_password_hash()`  [INFERRED]
-  test_auth.py → app/auth/service.py
-- `test_user_creation()` --calls--> `authenticate_user()`  [INFERRED]
-  test_auth.py → app/auth/service.py
-- `test_user_creation()` --calls--> `Database`  [INFERRED]
-  test_auth.py → app/database/db.py
-- `test_user_creation()` --calls--> `UserCreate`  [INFERRED]
-  test_auth.py → app/auth/schemas.py
-- `test_user_creation()` --calls--> `create_user()`  [INFERRED]
-  test_auth.py → app/auth/service.py
+- `test_lab_multiple_teachers()` --calls--> `parse_ics()`  [EXTRACTED]
+  tests/test_ics_parser.py → app/ics/parser.py
+- `test_lecture_parsing()` --calls--> `parse_ics()`  [EXTRACTED]
+  tests/test_ics_parser.py → app/ics/parser.py
+- `ObsidianPath` --uses--> `Settings`  [INFERRED]
+  app/main.py → app/config.py
+- `ObsidianPath` --uses--> `Database`  [INFERRED]
+  app/main.py → app/database/db.py
+- `test_create_update_and_delete()` --calls--> `Database`  [EXTRACTED]
+  tests/test_sync.py → app/database/db.py
 
 ## Import Cycles
 - None detected.
 
-## Communities (73 total, 9 thin omitted)
+## Communities (64 total, 10 thin omitted)
 
-### Community 0 - "LessonData"
-Cohesion: 0.15
-Nodes (17): LessonData, Нормализованное занятие MAISync. source_uid: Оригинальный UID из ICS. Сохраняем…, Совместимость с предыдущей версией проекта. В будущем лучше везде перейти на…, Хэш всех изменяемых данных занятия. Если хэш поменялся — занятие необходимо…, DiffResult, LessonChange, Результат сравнения одного занятия. kind: CREATED UPDATED MOVED DELETED…, Человекочитаемое описание изменения. (+9 more)
+### Community 0 - "forEach"
+Cohesion: 0.05
+Nodes (58): af(), bt(), constructor(), Cr(), ct(), df(), dt(), eject() (+50 more)
 
-### Community 1 - "l"
-Cohesion: 0.14
-Nodes (27): A(), bo(), co(), Do(), ei(), er(), fo(), fr() (+19 more)
+### Community 1 - "main.6f61398d.js"
+Cohesion: 0.05
+Nodes (46): ai(), as(), bf(), Br(), cd(), componentDidCatch(), cs(), dd() (+38 more)
 
-### Community 2 - "main.74f1fbe2.js"
-Cohesion: 0.08
-Nodes (21): ad(), ba(), Br(), ge(), id(), Ja(), jc(), Jr() (+13 more)
+### Community 2 - "s"
+Cohesion: 0.11
+Nodes (43): al(), At(), bl(), Cl(), clear(), d(), De(), dl() (+35 more)
 
-### Community 3 - "i"
-Cohesion: 0.13
-Nodes (27): al(), bl(), Cl(), clear(), dl(), el(), fl(), Gr() (+19 more)
+### Community 3 - "ms"
+Cohesion: 0.10
+Nodes (41): ac(), ae(), cc(), ce(), dc(), _e(), ee(), fc() (+33 more)
 
 ### Community 4 - "App.js"
 Cohesion: 0.08
 Nodes (19): App(), Achievements(), CalendarObsidianBlock(), Header(), Login(), NowBlock(), PlayerCard(), ScheduleList() (+11 more)
 
-### Community 5 - "parse_ics"
-Cohesion: 0.11
-Nodes (28): _build_identity_key(), _clean(), _detect_category(), _parse_datetime(), _parse_description(), parse_ics(), Any, datetime (+20 more)
+### Community 5 - "LessonData"
+Cohesion: 0.07
+Nodes (51): _build_identity_key(), _clean(), _detect_category(), LessonData, _parse_datetime(), _parse_description(), parse_ics(), Any (+43 more)
 
 ### Community 6 - "telegram/service.py"
-Cohesion: 0.13
-Nodes (28): error_handler(), handle_document(), handle_link_code(), handle_start(), main(), process_ics_content(), Handle incoming document messages (expected to be ICS files)., Обработка Telegram deep-link: https://t.me/BOT_USERNAME?start=CODE Telegram… (+20 more)
+Cohesion: 0.12
+Nodes (29): TelegramLinkCode, error_handler(), handle_document(), handle_link_code(), handle_start(), main(), process_ics_content(), Handle incoming document messages (expected to be ICS files). (+21 more)
 
-### Community 7 - "main.py"
-Cohesion: 0.08
-Nodes (46): get_user_from_session(), User, get_token_path(), Returns the path to the Google OAuth2 token file., echo(), get_achievements(), get_calendar_status(), get_current_active_user() (+38 more)
+### Community 7 - "User"
+Cohesion: 0.07
+Nodes (37): User, export_to_obsidian(), get_achievements(), get_current_active_user(), get_current_user_info(), get_notifications(), get_now(), get_obsidian_path() (+29 more)
 
-### Community 8 - "forEach"
-Cohesion: 0.14
-Nodes (18): af(), df(), eject(), $f(), ff(), forEach(), hf(), hs() (+10 more)
+### Community 8 - "rd"
+Cohesion: 0.12
+Nodes (41): An(), ar(), b(), bc(), Be(), c(), ec(), et() (+33 more)
 
 ### Community 9 - "enterface.md"
 Cohesion: 0.06
 Nodes (32): 10. Расписание, 11. Следующее событие, 12. Главный статистический блок, 13. Динамика нагрузки, 14. Top Subjects, 15. План против факта, 16. Достижения, 17. Streak (+24 more)
 
-### Community 10 - "zd"
-Cohesion: 0.15
-Nodes (33): bt(), ct(), dt(), ef(), fd(), ft(), Gd(), gt() (+25 more)
+### Community 10 - "ss"
+Cohesion: 0.12
+Nodes (40): ao(), ba(), Bi(), ca(), ci(), ef(), es(), Fe() (+32 more)
 
-### Community 11 - "auth/service.py"
-Cohesion: 0.17
-Nodes (21): UserLogin, authenticate_user(), confirm_email_change(), create_session(), delete_session(), get_password_hash(), initiate_email_change(), initiate_password_reset() (+13 more)
+### Community 11 - "main.py"
+Cohesion: 0.10
+Nodes (47): authenticate_user(), confirm_email_change(), create_session(), create_user(), delete_session(), get_password_hash(), get_user_from_session(), initiate_email_change() (+39 more)
 
-### Community 12 - "Lesson"
-Cohesion: 0.13
-Nodes (17): Lesson, get_credentials_path(), get_data_dir(), get_google_calendar_service(), Returns the directory where application data is stored. Uses the same directory…, Returns the path to the Google OAuth2 client secrets file., Authenticates with Google Calendar API and returns a service object. Handles…, _event_to_lesson_key() (+9 more)
+### Community 12 - "get_google_calendar_service"
+Cohesion: 0.08
+Nodes (26): get_credentials_path(), get_data_dir(), get_google_calendar_service(), get_token_path(), Returns the directory where application data is stored. Uses the same directory…, Returns the path to the Google OAuth2 client secrets file., Returns the path to the Google OAuth2 token file., Authenticates with Google Calendar API and returns a service object. Handles… (+18 more)
 
 ### Community 13 - "dependencies"
 Cohesion: 0.10
 Nodes (21): axios, react, react-dom, react-icons, react-router-dom, @testing-library/dom, @testing-library/jest-dom, @testing-library/react (+13 more)
 
-### Community 14 - "n"
-Cohesion: 0.12
-Nodes (29): ai(), bf(), ci(), componentDidCatch(), Dr(), eo(), gf(), Gu() (+21 more)
+### Community 14 - "l"
+Cohesion: 0.10
+Nodes (39): A(), ad(), bd(), bo(), co(), Do(), Dr(), ei() (+31 more)
 
 ### Community 15 - "mais_parser.py"
-Cohesion: 0.16
-Nodes (15): get_mais_groups(), import_mais_schedule(), Get list of MAIS groups., Import schedule for a given MAIS group name., _build_identity_key(), fetch_group_schedule(), fetch_groups(), _parse_date() (+7 more)
+Cohesion: 0.08
+Nodes (26): Notification, Session, check_mais_schedule_for_user(), get_mais_groups(), import_mais_schedule(), periodic_mais_check(), Check for schedule changes for a specific user and create notifications if…, Background task that periodically checks for MAIS schedule changes for all… (+18 more)
 
-### Community 16 - "create_user"
-Cohesion: 0.21
-Nodes (13): AuthStatusResponse, Config, BaseModel, TokenResponse, UserBase, UserCreate, UserResponse, create_user() (+5 more)
+### Community 16 - "ObsidianPath"
+Cohesion: 0.19
+Nodes (15): AuthStatusResponse, Config, BaseModel, TokenResponse, UserBase, UserCreate, UserLogin, UserResponse (+7 more)
 
-### Community 17 - "ss"
-Cohesion: 0.23
-Nodes (16): Bi(), ca(), es(), Fe(), ia(), Ir(), is(), ka() (+8 more)
+### Community 17 - "Changes Made for MAIS Schedule Parser Layer"
+Cohesion: 0.13
+Nodes (14): 1. Google Calendar Service Formatting (`app/google_calendar/service.py`), 2. Database Model Extensions (`app/database/models.py`), 3. Background Task for Periodic Checking (`app/main.py`), 4. API Endpoints (`app/main.py`), 5. MAIS Parser Enhancements (`app/mais_parser.py`), 6. Imports and Dependencies (`app/main.py`), Changes Made for MAIS Schedule Parser Layer, How It Works (+6 more)
 
 ### Community 18 - "Database"
-Cohesion: 0.13
-Nodes (19): build_parser(), cmd_export(), cmd_import_ics(), cmd_stats(), cmd_status(), main(), Export lessons to Obsidian., Show user statistics. (+11 more)
-
-### Community 19 - "post"
-Cohesion: 0.16
-Nodes (16): confirm_email_change_endpoint(), google_disconnect(), initiate_email_change_endpoint(), initiate_password_reset_endpoint(), Disconnect/revoke Google OAuth tokens., Verify email using token from verification link., Resend verification email to user., Initiate password reset process. (+8 more)
-
-### Community 20 - "Xn"
 Cohesion: 0.09
-Nodes (13): Gn(), Hn(), In(), Jn(), Kn(), Mn(), nr(), Qn() (+5 more)
+Nodes (38): build_parser(), cmd_export(), cmd_import_ics(), cmd_stats(), cmd_status(), main(), Export lessons to Obsidian., Show user statistics. (+30 more)
+
+### Community 19 - "nu"
+Cohesion: 0.27
+Nodes (13): au(), bs(), cu(), du(), eu(), fu(), nu(), ru() (+5 more)
+
+### Community 20 - "Выполненные изменения бэкенда"
+Cohesion: 0.15
+Nodes (12): 1. Исправлена ошибка сравнения дат (`can't compare offset-naive and offset-aware datetimes`), 2. Изменён метод эндпоинта подтверждения email на GET с параметром в query string, 3. Устранена причина 500‑ошибки при регистрации, 4. Переименован импорт функции проверки email для избежания конфликта имён, 5. Обновлён граф знаний, Header.js, Sidebar.js, Выполненные изменения бэкенда (+4 more)
 
 ### Community 21 - "package.json"
 Cohesion: 0.20
 Nodes (9): author, description, keywords, license, main, name, private, proxy (+1 more)
 
-### Community 22 - "s"
-Cohesion: 0.18
-Nodes (19): Cr(), De(), _e(), fs(), He(), It(), ks(), Le() (+11 more)
+### Community 22 - "Da"
+Cohesion: 0.23
+Nodes (3): Aa(), Da(), oi()
 
 ### Community 23 - "devDependencies"
 Cohesion: 0.22
@@ -217,17 +208,17 @@ Nodes (21): API Description, Architecture Overview, CLI Commands, Conflict Resol
 Cohesion: 0.25
 Nodes (7): background_color, display, icons, name, short_name, start_url, theme_color
 
-### Community 28 - "rd"
-Cohesion: 0.13
-Nodes (37): An(), ar(), b(), bd(), c(), constructor(), d(), et() (+29 more)
+### Community 28 - "telegram_link"
+Cohesion: 0.28
+Nodes (8): Создаёт одноразовый код привязки учетной записи Telegram и создаёт Telegram…, Unlink Telegram account., telegram_link(), telegram_unlink(), BaseModel, TelegramLinkResponse, TelegramStatusResponse, TelegramUnlinkResponse
 
-### Community 29 - "EmailService"
-Cohesion: 0.13
-Nodes (13): Settings, EmailService, Отправьте электронное письмо для сброса пароля. Args: email: адрес электронной…, Сервис для отправки писем по SMTP., Отправьте электронное письмо с запросом подтверждения смены email. Args: email:…, Отправьте электронное письмо с подтверждением новой электронной почты. Args:…, Render a Jinja2 template with the given context. Args: template_name: Name of…, Отправьте электронное письмо с подтверждением регистрации. Args: email: адрес… (+5 more)
+### Community 29 - "._render_template"
+Cohesion: 0.20
+Nodes (5): Отправьте электронное письмо для сброса пароля. Args: email: адрес электронной…, Отправьте электронное письмо с запросом подтверждения смены email. Args: email:…, Отправьте электронное письмо с подтверждением новой электронной почты. Args:…, Render a Jinja2 template with the given context. Args: template_name: Name of…, Отправьте электронное письмо с подтверждением регистрации. Args: email: адрес…
 
-### Community 30 - "Xu"
-Cohesion: 0.25
-Nodes (16): ac(), At(), cc(), ce(), dc(), fc(), ic(), Ju() (+8 more)
+### Community 30 - "Frontend Fixes for XO_OS"
+Cohesion: 0.29
+Nodes (6): Changes Made, Frontend Fixes for XO_OS, Header.js (`xo-os-web/src/components/Header.js`), How It Works, Notes, Sidebar.js (`xo-os-web/src/components/Sidebar.js`)
 
 ### Community 31 - "scripts"
 Cohesion: 0.40
@@ -241,33 +232,13 @@ Nodes (4): react-app, react-app/jest, eslintConfig, extends
 Cohesion: 0.67
 Nodes (3): App, MAISync, Web
 
-### Community 53 - "nu"
-Cohesion: 0.16
-Nodes (20): au(), bc(), Be(), bs(), cu(), du(), ec(), eu() (+12 more)
-
-### Community 54 - "ms"
-Cohesion: 0.16
-Nodes (20): ae(), cd(), cs(), dd(), ds(), ee(), gc(), gs() (+12 more)
-
 ### Community 55 - "Learn More"
 Cohesion: 0.14
 Nodes (13): Advanced Configuration, Analyzing the Bundle Size, Available Scripts, Code Splitting, Deployment, Getting Started with Create React App, Learn More, Making a Progressive Web App (+5 more)
 
-### Community 56 - "diff.py"
-Cohesion: 0.36
-Nodes (10): _as_local(), _date_distance_days(), _find_best_match(), _lesson_score(), datetime, Оценивает вероятность того, что old и new — одно и то же занятие после…, Ищет лучшее fuzzy-сопоставление. Ограничиваем поиск 14 днями, чтобы не…, Приводит datetime к Europe/Moscow. SQLite может вернуть datetime без tzinfo… (+2 more)
-
-### Community 57 - "calculate_diff"
-Cohesion: 0.53
-Nodes (9): calculate_diff(), Сравнивает старое состояние с новым. Алгоритм: 1. Exact match по identity_key.…, make_new(), make_old(), test_date_change_is_moved(), test_exact_identity_is_updated(), test_new_lesson_is_created(), test_time_change_is_moved() (+1 more)
-
 ### Community 58 - "Решение проблемы дублирования в Telegram боте"
 Cohesion: 0.20
 Nodes (9): Альтернативный подход (если subprocess нежелателен):, Анализ проблемы, Изменения в `app/telegram_bot.py`, Предлагаемое решение, Преимущества этого подхода:, Причина проблемы, Решение проблемы дублирования в Telegram боте, Следующие шаги: (+1 more)
-
-### Community 59 - "Da"
-Cohesion: 0.21
-Nodes (5): Aa(), Da(), oa(), oi(), za()
 
 ### Community 60 - "Usage"
 Cohesion: 0.25
@@ -285,49 +256,29 @@ Nodes (6): Direct URL fetch (optional), Forwarding from external bot, How it wor
 Cohesion: 0.40
 Nodes (4): Дополнительные рекомендации для полной уверенности:, Изменения в файле `app/google_calendar/service.py`:, Исправлено дублирование событий в Google Calendar, Как это решает проблему дублирования:
 
-### Community 64 - "fi"
-Cohesion: 0.27
-Nodes (15): ao(), di(), fi(), gi(), gl(), io(), La(), no() (+7 more)
-
-### Community 67 - "export_to_obsidian"
-Cohesion: 0.20
-Nodes (10): export_to_obsidian(), get_current_user_info(), get_obsidian_path(), get_obsidian_vault_path(), logout(), Any, Экспортируйте занятия в Obsidian., Log out the current user. (+2 more)
-
-### Community 68 - "models.py"
-Cohesion: 0.33
-Nodes (6): Base, Session, TelegramLinkCode, DeclarativeBase, Test password hashing directly, test_password_hash()
-
 ### Community 69 - "Fixes Applied"
 Cohesion: 0.25
 Nodes (7): 1. Email Verification Endpoint, 2. Registration Endpoint, 3. Import Alias, 4. Graph Update, Expected Results, Fixes Applied, Prerequisites
 
-### Community 70 - "hc"
-Cohesion: 0.33
-Nodes (6): hc(), Hr(), ko(), pc(), so(), wo()
-
-### Community 71 - "ls"
-Cohesion: 0.50
-Nodes (4): as(), ls(), Ra(), rs()
-
 ## Knowledge Gaps
-- **149 isolated node(s):** `Config`, `short_name`, `name`, `icons`, `start_url` (+144 more)
+- **173 isolated node(s):** `Config`, `short_name`, `name`, `icons`, `start_url` (+168 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **9 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **10 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Database` connect `Database` to `LessonData`, `models.py`, `telegram/service.py`, `main.py`, `Lesson`, `create_user`, `EmailService`?**
+- **Why does `User` connect `User` to `telegram/service.py`, `main.py`, `mais_parser.py`, `ObsidianPath`, `Database`, `telegram_link`?**
   _High betweenness centrality (0.012) - this node is a cross-community bridge._
-- **Why does `parse_ics()` connect `parse_ics` to `LessonData`?**
-  _High betweenness centrality (0.011) - this node is a cross-community bridge._
-- **Why does `SyncService` connect `Database` to `LessonData`, `export_to_obsidian`, `main.py`, `Lesson`, `mais_parser.py`?**
-  _High betweenness centrality (0.008) - this node is a cross-community bridge._
-- **Are the 15 inferred relationships involving `l()` (e.g. with `b()` and `c()`) actually correct?**
-  _`l()` has 15 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `Database` connect `Database` to `ObsidianPath`, `main.py`, `telegram/service.py`, `mais_parser.py`?**
+  _High betweenness centrality (0.010) - this node is a cross-community bridge._
+- **Why does `parse_ics()` connect `LessonData` to `Database`?**
+  _High betweenness centrality (0.010) - this node is a cross-community bridge._
+- **Are the 16 inferred relationships involving `l()` (e.g. with `b()` and `c()`) actually correct?**
+  _`l()` has 16 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 8 inferred relationships involving `s()` (e.g. with `hd()` and `mf()`) actually correct?**
   _`s()` has 8 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 32 inferred relationships involving `n()` (e.g. with `ad()` and `ci()`) actually correct?**
-  _`n()` has 32 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 31 inferred relationships involving `n()` (e.g. with `ad()` and `ci()`) actually correct?**
+  _`n()` has 31 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 2 inferred relationships involving `ss()` (e.g. with `i()` and `lo()`) actually correct?**
   _`ss()` has 2 INFERRED edges - model-reasoned connections that need verification._

@@ -27,6 +27,14 @@ LESSON_TYPE_COLOR_MAP = {
     "EXAM": 11,  # Э - помидор (цвет ID 11: Tomato)
 }
 
+# Mapping from lesson_type to Russian abbreviations for event title
+LESSON_TYPE_ABBREVIATION_MAP = {
+    "LECTURE": "ЛК",
+    "PRACTICE": "ПЗ",
+    "LAB": "ЛР",
+    "EXAM": "Э",
+}
+
 
 def _event_to_lesson_key(event: dict) -> str | None:
     """
@@ -55,10 +63,28 @@ def _lesson_to_google_event(lesson: Lesson | LessonData) -> dict:
     if end.tzinfo is None:
         end = end.replace(tzinfo=LOCAL_TIMEZONE)
 
+    # Формируем заголовок: аббревиатура типа занятия + название предмета
+    abbreviation = LESSON_TYPE_ABBREVIATION_MAP.get(lesson.lesson_type, "")
+    subject = lesson.subject or ""
+    if abbreviation and subject:
+        summary = f"{abbreviation} {subject}"
+    elif abbreviation:
+        summary = abbreviation
+    else:
+        summary = subject
+
+    # Формируем описание: аудитория на первой строке, преподаватель на второй
+    description_parts = []
+    if lesson.room:
+        description_parts.append(lesson.room)
+    if lesson.teacher:
+        description_parts.append(lesson.teacher)
+    description = "\n".join(description_parts)
+
     event = {
-        "summary": lesson.subject,
-        "location": lesson.room or "",
-        "description": lesson.description or "",
+        "summary": summary,
+        "location": "",  # Место проведения больше не используется (остается пустым)
+        "description": description,
         "start": {
             "dateTime": start.isoformat(),
             "timeZone": str(LOCAL_TIMEZONE),
@@ -94,28 +120,32 @@ class GoogleCalendarSyncService:
         self,
         db: Database,
         *,
+        calendar_id: str | None = None,
         calendar_name: str = "primary",
         user_id: int,
     ):
         self.db = db
-        self.calendar_name = calendar_name
         self.user_id = user_id
+        self.calendar_name = calendar_name
 
-        if calendar_name == "primary":
-            self.calendar_id = "primary"
+        if calendar_id is not None:
+            self.calendar_id = calendar_id
         else:
-            service = get_google_calendar_service()
-            calendar_list = service.calendarList().list().execute()
-
-            for cal in calendar_list.get("items", []):
-                if cal.get("summary") == calendar_name:
-                    self.calendar_id = cal["id"]
-                    break
+            if calendar_name == "primary":
+                self.calendar_id = "primary"
             else:
-                raise ValueError(
-                    f"Calendar with name '{calendar_name}' "
-                    "not found in your calendar list."
-                )
+                service = get_google_calendar_service()
+                calendar_list = service.calendarList().list().execute()
+
+                for cal in calendar_list.get("items", []):
+                    if cal.get("summary") == calendar_name:
+                        self.calendar_id = cal["id"]
+                        break
+                else:
+                    raise ValueError(
+                        f"Calendar with name '{calendar_name}' "
+                        "not found in your calendar list."
+                    )
 
     def _fetch_google_events(
         self,
