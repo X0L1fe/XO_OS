@@ -1,0 +1,324 @@
+{
+  "meta": {
+    "product": "XO_OS",
+    "design_role": "Personal Operating System / RPG productivity dashboard",
+    "reference_image": "xo_os_reference.png",
+    "reference_resolution_px": {
+      "width": 1586,
+      "height": 992
+    },
+    "goal": "Reproduce the visual composition and visual hierarchy of the reference, not reinterpret it into a generic dashboard.",
+    "fidelity_priority": [
+      "layout_composition",
+      "visual_hierarchy",
+      "spacing_and_scale",
+      "color_system",
+      "component_shapes",
+      "micro_interactions"
+    ]
+  },
+  "design_language": {
+    "mood": [
+      "dark",
+      "futuristic",
+      "minimal",
+      "RPG",
+      "technical",
+      "premium"
+    ],
+    "avoid": [
+      "generic admin dashboard",
+      "dense tiny UI",
+      "dominant purple neon",
+      "excessive cyberpunk",
+      "RGB gaming aesthetic",
+      "large empty black areas",
+      "randomly different card styles"
+    ],
+    "surfaces": {
+      "background": "#02070D",
+      "panel": "#050D17",
+      "card": "#07111E",
+      "card_alt": "#091525",
+      "active": "#0B2550",
+      "border": "#12304A"
+    },
+    "text": {
+      "primary": "#F3F7FF",
+      "secondary": "#8FA3BB",
+      "muted": "#5D7188"
+    },
+    "accents": {
+      "blue": "#1683FF",
+      "blue_bright": "#2EA0FF",
+      "purple": "#8F5BFF",
+      "yellow": "#FFC83D",
+      "green": "#16D69A",
+      "red": "#FF5A6A"
+    },
+    "effects": {
+      "border": "1px solid rgba(40,110,170,0.35)",
+      "radius": "8-10px",
+      "glow": "subtle, localized",
+      "shadow": "soft deep shadow, never oversized",
+      "transitions_ms": 180
+    },
+    "typography": {
+      "font_family": "modern sans-serif",
+      "numeric_font": "monospace or tabular numerals",
+      "headings": "semibold/bold with restrained sizes",
+      "body": "compact but readable"
+    }
+  },
+  "global_layout": {
+    "viewport_reference": "desktop 1586x992",
+    "sidebar": {
+      "position": "fixed/left column",
+      "width_px": 230,
+      "style": "dark vertical rail with its own surface",
+      "contains": [
+        "logo",
+        "navigation",
+        "player_mini_status",
+        "Google Calendar status",
+        "version"
+      ]
+    },
+    "main": {
+      "left_offset_px": 230,
+      "padding_px": 22,
+      "gap_px": 18
+    },
+    "header": {
+      "height_px": 70,
+      "layout": [
+        "search_left",
+        "status_center_right",
+        "profile_right"
+      ],
+      "search_width_px": 480
+    },
+    "content_grid": {
+      "type": "12-column desktop grid",
+      "main_content": "dominant",
+      "right_rail": "narrow",
+      "gap_px": 16
+    }
+  },
+  "dashboard": {
+    "top_player_row": {
+      "spans_main_area": true,
+      "player_card": {
+        "layout": "horizontal",
+        "avatar": "large circular avatar with blue ring",
+        "identity": [
+          "name",
+          "role",
+          "level",
+          "xp"
+        ],
+        "stats": [
+          "Focus",
+          "Energy",
+          "Discipline",
+          "Productivity"
+        ],
+        "stat_cards": "four compact bordered cards aligned horizontally"
+      },
+      "quote_card": {
+        "position": "right_rail",
+        "style": "small atmospheric text card"
+      }
+    },
+    "main_left": {
+      "now": {
+        "style": "large primary card",
+        "header": "Сейчас",
+        "header_accent": "blue dot",
+        "contains": [
+          "current task/lesson",
+          "category",
+          "description",
+          "duration",
+          "priority",
+          "xp reward",
+          "start button"
+        ],
+        "cta": "blue filled button aligned right"
+      },
+      "schedule": {
+        "title": "Ближайшие занятия",
+        "style": "large list card",
+        "rows": {
+          "layout": [
+            "time",
+            "type_badge",
+            "subject",
+            "room",
+            "teacher",
+            "sync_status"
+          ],
+          "separators": true
+        },
+        "types": {
+          "lecture": "blue",
+          "practice": "purple",
+          "lab": "yellow",
+          "exam": "red"
+        }
+      },
+      "recent_changes": {
+        "style": "large compact activity log card",
+        "rows": [
+          "status_badge",
+          "time",
+          "subject",
+          "change_description"
+        ]
+      }
+    },
+    "main_right": {
+      "semester_load": {
+        "style": "large analytics card",
+        "visual": "donut chart",
+        "center_value": "large total hours",
+        "legend": [
+          "ЛК",
+          "ПЗ",
+          "ЛР"
+        ]
+      },
+      "weekly_activity": {
+        "style": "bar chart inside same analytics card",
+        "x_axis": "week numbers",
+        "highlight": "single current/highlighted bar in bright blue",
+        "header_action": "Часы →"
+      },
+      "achievements": {
+        "style": "compact horizontal achievement strip",
+        "icons": "outlined hexagonal/badge-like",
+        "layout": "4 compact achievements",
+        "link": "Показать все →"
+      },
+      "next_event": {
+        "style": "small schedule card"
+      },
+      "google_calendar": {
+        "style": "small integration/status card"
+      }
+    }
+  },
+  "player_card": {
+    "composition": [
+      "avatar",
+      "identity_block",
+      "xp_progress",
+      "stat_card_focus",
+      "stat_card_energy",
+      "stat_card_discipline",
+      "stat_card_productivity"
+    ],
+    "level_display": "large and immediately visible",
+    "xp_bar": {
+      "track": "dark blue",
+      "fill": "bright blue",
+      "height_px": 7
+    },
+    "stat_card": {
+      "icon_box": "small blue-tinted square",
+      "label": "small secondary text",
+      "value": "large number",
+      "suffix": "/100"
+    }
+  },
+  "now_card": {
+    "title": "Сейчас",
+    "accent": "blue",
+    "primary_text": "large",
+    "secondary_text": "small",
+    "metadata": "small icon + label rows",
+    "button": {
+      "background": "bright blue",
+      "shape": "rounded",
+      "placement": "bottom-right"
+    }
+  },
+  "schedule": {
+    "container": "one coherent large card",
+    "row_height_px": 53,
+    "time_width_px": 105,
+    "type_badge_width": 90,
+    "subject_width": "flex",
+    "room_width_px": 120,
+    "teacher_width_px": 150,
+    "status_width_px": 100,
+    "sync_indicator": "green dot + text"
+  },
+  "statistics": {
+    "style": "integrated analytical cockpit",
+    "load": "donut + legend",
+    "weekly": "horizontal bar chart with gridlines",
+    "top_subjects": "ranked rows with proportional blue bars",
+    "plan_fact": "paired compact progress bars",
+    "colors": {
+      "study": "blue",
+      "projects": "purple",
+      "self": "green"
+    }
+  },
+  "achievements": {
+    "style": "RPG achievement badges",
+    "layout": "compact cards/tiles",
+    "active": "bright outline + subtle glow",
+    "locked": "dimmed outline + low opacity",
+    "streak": "yellow/orange highlighted chip or card"
+  },
+  "settings": {
+    "style": "system modules",
+    "sections": [
+      "Google Calendar",
+      "Telegram",
+      "Obsidian"
+    ],
+    "card_behavior": "same visual language as dashboard cards",
+    "buttons": "secondary blue outlined/filled controls",
+    "telegram_actions": [
+      "Open Telegram",
+      "Copy code",
+      "Refresh status",
+      "Unlink"
+    ]
+  },
+  "navigation": {
+    "items": [
+      "Главная",
+      "Расписание",
+      "Задачи",
+      "Проекты",
+      "Статистика",
+      "Достижения",
+      "Настройки"
+    ],
+    "active_item": {
+      "background": "blue tinted",
+      "left_indicator": "thin bright blue edge",
+      "icon": "blue/white",
+      "text": "high contrast"
+    }
+  },
+  "responsive": {
+    "desktop": "preserve reference composition",
+    "tablet": "collapse right rail and stack secondary analytics",
+    "mobile": "single column, compact header, collapsible sidebar"
+  },
+  "implementation_rules": [
+    "Reuse existing components before creating duplicates.",
+    "Do not invent backend APIs.",
+    "Preserve existing auth, Google Calendar, Telegram, Obsidian and schedule integrations.",
+    "Use existing data contracts and provide visual fallbacks when data is missing.",
+    "Do not reduce font sizes just to fit more content.",
+    "Do not replace the blue-centered palette with purple.",
+    "Do not introduce excessive animation.",
+    "Treat the reference image as the primary visual authority."
+  ]
+}
