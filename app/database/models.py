@@ -134,6 +134,11 @@ class User(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    # AI verification enabled setting
+    ai_verification_enabled: Mapped[bool] = mapped_column(
+        Integer,
+        default=0,
+    )  # using Integer for boolean compatibility with SQLite
     schedule_exclusions: Mapped[List["ScheduleExclusion"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -447,3 +452,122 @@ class ScheduleExclusion(Base):
             name="uq_schedule_exclusion_user_type_key",
         ),
     )
+
+
+class FocusSession(Base):
+    __tablename__ = "focus_sessions"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    lesson_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lessons.id"),
+        nullable=True,
+        index=True,
+    )
+    goal_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=datetime.now(timezone.utc),
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    total_paused_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="active",
+    )  # active, paused, completed, cancelled
+    completion_mode: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )  # manual, ai_verified
+    verification_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="not_required",
+    )  # not_required, pending, approved, partial, rejected, error
+    xp_awarded: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_provided: Mapped[bool] = mapped_column(Integer, default=0)  # using Integer for boolean compatibility with SQLite
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc),
+        onupdate=datetime.now(timezone.utc),
+    )
+
+    # Relationships
+    user: Mapped["User"] = relationship()
+    lesson: Mapped["Lesson"] = relationship()
+
+
+class FocusEvidence(Base):
+    __tablename__ = "focus_evidence"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+    focus_session_id: Mapped[int] = mapped_column(
+        ForeignKey("focus_sessions.id"),
+        nullable=False,
+        index=True,
+    )
+    type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )  # text, url, image, file
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    file_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc),
+    )
+
+    # Relationship
+    focus_session: Mapped["FocusSession"] = relationship()
+
+
+class XPTransaction(Base):
+    __tablename__ = "xp_transactions"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc),
+    )
+
+    # Relationship
+    user: Mapped["User"] = relationship()
