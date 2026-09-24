@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from fastapi import HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, status
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session as SQLAlchemySession
 
@@ -24,6 +24,25 @@ try:
 except Exception as e:
     print(f"Bcrypt initialization failed: {e}, falling back to pbkdf2_sha256")
     pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
+
+# Dependency to get current user from session cookie
+def get_current_user(session_token: Optional[str] = Cookie(None)) -> Optional[User]:
+    if not session_token:
+        return None
+    with db.session() as db_session:
+        return get_user_from_session(db_session, session_token)
+
+
+# Dependency to require authentication
+def get_current_active_user(
+    current_user: Optional[User] = Depends(get_current_user),
+) -> User:
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not current_user.is_active:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return current_user
 
 
 def get_password_hash(password: str) -> str:
@@ -323,7 +342,9 @@ def initiate_email_change(
 
     # Проверяем пароль пользователя
     if not verify_password(password, db_user.password_hash):
-        logger.warning(f"Invalid password for user {user_id} during email change initiation")
+        logger.warning(
+            f"Invalid password for user {user_id} during email change initiation"
+        )
         return False
 
     # Проверяем формат нового email

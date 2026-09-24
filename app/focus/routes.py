@@ -4,13 +4,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, status
 from fastapi.security import HTTPBearer
-from sqlalchemy.orm import Session
 
 from app.ai.verification import VerificationResult, get_ai_verification_service
 from app.auth.service import get_current_user
-from app.database import get_db
+from app.database import db
 from app.database.models import User
 from app.focus.service import FocusService
+from app.main import publish_focus_updated
 
 router = APIRouter(
     prefix="/api/focus",
@@ -19,59 +19,59 @@ router = APIRouter(
 )
 
 
-def get_focus_service(db: Session = Depends(get_db)) -> FocusService:
-    return FocusService(db)
-
-
 @router.post("/start", status_code=status.HTTP_201_CREATED)
 async def start_focus_session(
     goal_text: Optional[str] = None,
     current_user: User = Depends(get_current_user),
-    focus_service: FocusService = Depends(get_focus_service),
 ):
     """
     Start a new focus session for the current user.
     The backend determines the current lesson based on time and user's schedule.
     If there is already an active session, return it.
     """
-    session = focus_service.start_focus_session(
-        user_id=current_user.id,
-        goal_text=goal_text,
-    )
-    return {
-        "session_id": session.id,
-        "status": session.status,
-        "lesson_id": session.lesson_id,
-        "lesson_subject": session.lesson.subject if session.lesson else "",
-        "lesson_description": session.lesson.description if session.lesson else "",
-        "goal_text": session.goal_text,
-        "started_at": session.started_at,
-        "elapsed_seconds": 0,  # Just started
-        "xp_preview": 3
-        if session.completion_mode == "manual"
-        else 10,  # Preview: manual gives 3, AI gives 10 base
-    }
+    with db.session() as session:
+        focus_service = FocusService(session)
+        session_obj = focus_service.start_focus_session(
+            user_id=current_user.id,
+            goal_text=goal_text,
+        )
+        return {
+            "session_id": session_obj.id,
+            "status": session_obj.status,
+            "lesson_id": session_obj.lesson_id,
+            "lesson_subject": session_obj.lesson.subject if session_obj.lesson else "",
+            "lesson_description": session_obj.lesson.description
+            if session_obj.lesson
+            else "",
+            "goal_text": session_obj.goal_text,
+            "started_at": session_obj.started_at,
+            "elapsed_seconds": 0,  # Just started
+            "xp_preview": 3
+            if session_obj.completion_mode == "manual"
+            else 10,  # Preview: manual gives 3, AI gives 10 base
+        }
 
 
 @router.post("/{session_id}/pause", status_code=status.HTTP_200_OK)
 async def pause_focus_session(
     session_id: int = Path(..., gt=0),
     current_user: User = Depends(get_current_user),
-    focus_service: FocusService = Depends(get_focus_service),
 ):
     """
     Pause an active focus session.
     """
     try:
-        session = focus_service.pause_focus_session(
-            session_id=session_id,
-            user_id=current_user.id,
-        )
-        return {
-            "session_id": session.id,
-            "status": session.status,
-            "elapsed_seconds": _calculate_elapsed_seconds(session),
-        }
+        with db.session() as session:
+            focus_service = FocusService(session)
+            session_obj = focus_service.pause_focus_session(
+                session_id=session_id,
+                user_id=current_user.id,
+            )
+            return {
+                "session_id": session_obj.id,
+                "status": session_obj.status,
+                "elapsed_seconds": _calculate_elapsed_seconds(session_obj),
+            }
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -80,21 +80,22 @@ async def pause_focus_session(
 async def resume_focus_session(
     session_id: int = Path(..., gt=0),
     current_user: User = Depends(get_current_user),
-    focus_service: FocusService = Depends(get_focus_service),
 ):
     """
     Resume a paused focus session.
     """
     try:
-        session = focus_service.resume_focus_session(
-            session_id=session_id,
-            user_id=current_user.id,
-        )
-        return {
-            "session_id": session.id,
-            "status": session.status,
-            "elapsed_seconds": _calculate_elapsed_seconds(session),
-        }
+        with db.session() as session:
+            focus_service = FocusService(session)
+            session_obj = focus_service.resume_focus_session(
+                session_id=session_id,
+                user_id=current_user.id,
+            )
+            return {
+                "session_id": session_obj.id,
+                "status": session_obj.status,
+                "elapsed_seconds": _calculate_elapsed_seconds(session_obj),
+            }
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -106,92 +107,93 @@ async def complete_focus_session(
     evidence: Optional[List[dict]] = None,
     background_tasks: BackgroundTasks = None,
     current_user: User = Depends(get_current_user),
-    focus_service: FocusService = Depends(get_focus_service),
-    ai_service: AIVerificationService = Depends(get_ai_verification_service),
 ):
     """
     Complete a focus session.
     If completion_mode is "manual", we award base XP (3 XP) immediately.
     If completion_mode is "ai_verified", we set verification_status to pending and award XP after verification.
     """
-    try:
-        # First, complete the session (this sets ended_at, etc.)
-        session = focus_service.complete_focus_session(
-            session_id=session_id,
-            user_id=current_user.id,
-            completion_mode=completion_mode,
-            evidence=evidence,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
-    if completion_mode == "manual":
-        # For manual completion, the XP has already been awarded in the service.
-        # We just need to return the updated session.
-        return {
-            "session_id": session.id,
-            "status": session.status,
-            "duration_seconds": session.duration_seconds,
-            "xp_awarded": session.xp_awarded,
-            "verification_status": session.verification_status,
-            "completion_mode": session.completion_mode,
-        }
-
-    elif completion_mode == "ai_verified":
-        # For AI verification, we have set the session to pending verification.
-        # We need to trigger the AI verification in the background.
-        if background_tasks is None:
-            # If no background tasks, we'll run it synchronously (not ideal, but for simplicity)
-            # In a real app, we should use a background task or a queue.
-            verification_result = await ai_service.verify_evidence(
-                goal=session.goal_text or "",
-                evidence=evidence or [],
-            )
-            # Update the session with the verification result
-            session.verification_status = (
-                "approved" if verification_result.approved else "rejected"
-            )
-            # If approved, award base XP (10) plus bonus based on score
-            base_xp = 10
-            bonus_xp = int(verification_result.score * 10)  # 0-10 bonus
-            total_xp = base_xp + bonus_xp
-            session.xp_awarded = total_xp
-            # Award the XP
-            focus_service._award_xp(
+    with db.session() as session:
+        focus_service = FocusService(session)
+        ai_service = get_ai_verification_service()
+        try:
+            # First, complete the session (this sets ended_at, etc.)
+            session_obj = focus_service.complete_focus_session(
+                session_id=session_id,
                 user_id=current_user.id,
-                amount=total_xp,
-                reason="focus_verified",
-                source_id=session.id,
+                completion_mode=completion_mode,
+                evidence=evidence,
             )
-            # Update the session in the database
-            focus_service.db.commit()
-            focus_service.db.refresh(session)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+        if completion_mode == "manual":
+            # For manual completion, the XP has already been awarded in the service.
+            # We just need to return the updated session.
+            return {
+                "session_id": session_obj.id,
+                "status": session_obj.status,
+                "duration_seconds": session_obj.duration_seconds,
+                "xp_awarded": session_obj.xp_awarded,
+                "verification_status": session_obj.verification_status,
+                "completion_mode": session_obj.completion_mode,
+            }
+
+        elif completion_mode == "ai_verified":
+            # For AI verification, we have set the session to pending verification.
+            # We need to trigger the AI verification in the background.
+            if background_tasks is None:
+                # If no background tasks, we'll run it synchronously (not ideal, but for simplicity)
+                # In a real app, we should use a background task or a queue.
+                verification_result = await ai_service.verify_evidence(
+                    goal=session_obj.goal_text or "",
+                    evidence=evidence or [],
+                )
+                # Update the session with the verification result
+                session_obj.verification_status = (
+                    "approved" if verification_result.approved else "rejected"
+                )
+                # If approved, award base XP (10) plus bonus based on score
+                base_xp = 10
+                bonus_xp = int(verification_result.score * 10)  # 0-10 bonus
+                total_xp = base_xp + bonus_xp
+                session_obj.xp_awarded = total_xp
+                # Award the XP
+                focus_service._award_xp(
+                    user_id=current_user.id,
+                    amount=total_xp,
+                    reason="focus_verified",
+                    source_id=session_obj.id,
+                )
+                # Update the session in the database
+                session.commit()
+                session.refresh(session_obj)
+            else:
+                # Add a background task to handle the AI verification and XP awarding
+                background_tasks.add_task(
+                    _process_ai_verification,
+                    session_id=session_obj.id,
+                    user_id=current_user.id,
+                    goal=session_obj.goal_text or "",
+                    evidence=evidence or [],
+                    focus_service=focus_service,
+                    ai_service=ai_service,
+                )
+
+            return {
+                "session_id": session_obj.id,
+                "status": session_obj.status,
+                "duration_seconds": session_obj.duration_seconds,
+                "verification_status": session_obj.verification_status,  # Will be "pending"
+                "completion_mode": session_obj.completion_mode,
+                "xp_preview": 10,  # Base XP for AI verification, bonus to be determined
+            }
+
         else:
-            # Add a background task to handle the AI verification and XP awarding
-            background_tasks.add_task(
-                _process_ai_verification,
-                session_id=session.id,
-                user_id=current_user.id,
-                goal=session.goal_text or "",
-                evidence=evidence or [],
-                focus_service=focus_service,
-                ai_service=ai_service,
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid completion mode",
             )
-
-        return {
-            "session_id": session.id,
-            "status": session.status,
-            "duration_seconds": session.duration_seconds,
-            "verification_status": session.verification_status,  # Will be "pending"
-            "completion_mode": session.completion_mode,
-            "xp_preview": 10,  # Base XP for AI verification, bonus to be determined
-        }
-
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid completion mode",
-        )
 
 
 def _calculate_elapsed_seconds(session) -> int:
@@ -284,53 +286,57 @@ async def _process_ai_verification(
 @router.get("/active", status_code=status.HTTP_200_OK)
 async def get_active_focus_session(
     current_user: User = Depends(get_current_user),
-    focus_service: FocusService = Depends(get_focus_service),
 ):
     """
     Get the active focus session for the current user, if any.
     """
-    session = focus_service.get_active_session(user_id=current_user.id)
-    if not session:
-        return None
-    return {
-        "session_id": session.id,
-        "status": session.status,
-        "lesson_id": session.lesson_id,
-        "goal_text": session.goal_text,
-        "started_at": session.started_at,
-        "elapsed_seconds": _calculate_elapsed_seconds(session),
-        "xp_preview": 3 if session.completion_mode == "manual" else 10,
-    }
+    with db.session() as session:
+        focus_service = FocusService(session)
+        session_obj = focus_service.get_active_session(user_id=current_user.id)
+        if not session_obj:
+            return None
+        return {
+            "session_id": session_obj.id,
+            "status": session_obj.status,
+            "lesson_id": session_obj.lesson_id,
+            "goal_text": session_obj.goal_text,
+            "started_at": session_obj.started_at,
+            "elapsed_seconds": _calculate_elapsed_seconds(session_obj),
+            "xp_preview": 3 if session_obj.completion_mode == "manual" else 10,
+        }
 
 
 @router.get("/{session_id}", status_code=status.HTTP_200_OK)
 async def get_focus_session(
     session_id: int = Path(..., gt=0),
     current_user: User = Depends(get_current_user),
-    focus_service: FocusService = Depends(get_focus_service),
 ):
     """
     Get a focus session by ID.
     """
-    session = focus_service.get_session(session_id=session_id, user_id=current_user.id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Focus session not found"
+    with db.session() as session:
+        focus_service = FocusService(session)
+        session_obj = focus_service.get_session(
+            session_id=session_id, user_id=current_user.id
         )
-    return {
-        "session_id": session.id,
-        "status": session.status,
-        "lesson_id": session.lesson_id,
-        "goal_text": session.goal_text,
-        "started_at": session.started_at,
-        "ended_at": session.ended_at,
-        "duration_seconds": session.duration_seconds,
-        "total_paused_seconds": session.total_paused_seconds,
-        "completion_mode": session.completion_mode,
-        "verification_status": session.verification_status,
-        "xp_awarded": session.xp_awarded,
-        "evidence_provided": session.evidence_provided,
-    }
+        if not session_obj:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Focus session not found"
+            )
+        return {
+            "session_id": session_obj.id,
+            "status": session_obj.status,
+            "lesson_id": session_obj.lesson_id,
+            "goal_text": session_obj.goal_text,
+            "started_at": session_obj.started_at,
+            "ended_at": session_obj.ended_at,
+            "duration_seconds": session_obj.duration_seconds,
+            "total_paused_seconds": session_obj.total_paused_seconds,
+            "completion_mode": session_obj.completion_mode,
+            "verification_status": session_obj.verification_status,
+            "xp_awarded": session_obj.xp_awarded,
+            "evidence_provided": session_obj.evidence_provided,
+        }
 
 
 @router.post("/{session_id}/evidence", status_code=status.HTTP_200_OK)
@@ -338,7 +344,6 @@ async def add_evidence_to_focus_session(
     session_id: int = Path(..., gt=0),
     evidence: dict = None,
     current_user: User = Depends(get_current_user),
-    focus_service: FocusService = Depends(get_focus_service),
 ):
     """
     Add evidence to a focus session.
@@ -348,17 +353,19 @@ async def add_evidence_to_focus_session(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Evidence is required"
         )
     try:
-        new_evidence = focus_service.add_evidence(
-            session_id=session_id,
-            user_id=current_user.id,
-            evidence=evidence,
-        )
-        return {
-            "id": new_evidence.id,
-            "type": new_evidence.type,
-            "content": new_evidence.content,
-            "file_path": new_evidence.file_path,
-            "created_at": new_evidence.created_at,
-        }
+        with db.session() as session:
+            focus_service = FocusService(session)
+            new_evidence = focus_service.add_evidence(
+                session_id=session_id,
+                user_id=current_user.id,
+                evidence=evidence,
+            )
+            return {
+                "id": new_evidence.id,
+                "type": new_evidence.type,
+                "content": new_evidence.content,
+                "file_path": new_evidence.file_path,
+                "created_at": new_evidence.created_at,
+            }
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

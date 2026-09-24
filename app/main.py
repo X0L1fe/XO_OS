@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 import httpx
 from fastapi import (
@@ -52,11 +55,14 @@ from app.auth.service import (
 from app.config import Settings
 from app.database.db import Database
 from app.database.models import (
+    FocusEvidence,
+    FocusSession,
     Lesson,
     Notification,
     ScheduleExclusion,
     User,
     UserStats,
+    XPTransaction,
 )
 from app.email.service import EmailService
 from app.focus.routes import (
@@ -261,70 +267,76 @@ def get_schedule_exclusions(db: Session, user_id: int) -> tuple[set, set]:
 @app.get("/api/gamification")
 def get_gamification(
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
 ):
     """
     Получите статистику геймификации текущего пользователя (уровень, опыт, серия).
     Это единственный источник истины для отображения геймификации интерфейса.
     """
-    stats = db.query(UserStats).filter(UserStats.user_id == current_user.id).first()
-    if not stats:
-        # Возвращаем значения по умолчанию, если статистика не существует
+    with db.session() as session:
+        stats = (
+            session.query(UserStats)
+            .filter(UserStats.user_id == current_user.id)
+            .first()
+        )
+        if not stats:
+            # Возвращаем значения по умолчанию, если статистика не существует
+            return {
+                "level": 1,
+                "total_xp": 0,
+                "xp_current_level": 0,
+                "xp_for_next_level": 1000,
+                "xp_remaining": 1000,
+                "progress_percent": 0,
+                "current_streak": 0,
+                "max_streak": 0,
+            }
+
+        total_xp = stats.total_xp
+        level = stats.level
+        current_streak = stats.current_streak
+        max_streak = stats.max_streak
+
+        # Рассчитать XP для текущего уровня и прогресса
+        xp_for_current_level = (level - 1) * 1000
+        xp_current_level = total_xp - xp_for_current_level
+        xp_for_next_level = 1000
+        xp_remaining = xp_for_next_level - xp_current_level
+        progress_percent = (xp_current_level / xp_for_next_level) * 100
+
         return {
-            "level": 1,
-            "total_xp": 0,
-            "xp_current_level": 0,
-            "xp_for_next_level": 1000,
-            "xp_remaining": 1000,
-            "progress_percent": 0,
-            "current_streak": 0,
-            "max_streak": 0,
+            "level": level,
+            "total_xp": total_xp,
+            "xp_current_level": xp_current_level,
+            "xp_for_next_level": xp_for_next_level,
+            "xp_remaining": xp_remaining,
+            "progress_percent": round(progress_percent, 2),
+            "current_streak": current_streak,
+            "max_streak": max_streak,
         }
-
-    total_xp = stats.total_xp
-    level = stats.level
-    current_streak = stats.current_streak
-    max_streak = stats.max_streak
-
-    # Рассчитать XP для текущего уровня и прогресса
-    xp_for_current_level = (level - 1) * 1000
-    xp_current_level = total_xp - xp_for_current_level
-    xp_for_next_level = 1000
-    xp_remaining = xp_for_next_level - xp_current_level
-    progress_percent = (xp_current_level / xp_for_next_level) * 100
-
-    return {
-        "level": level,
-        "total_xp": total_xp,
-        "xp_current_level": xp_current_level,
-        "xp_for_next_level": xp_for_next_level,
-        "xp_remaining": xp_remaining,
-        "progress_percent": round(progress_percent, 2),
-        "current_streak": current_streak,
-        "max_streak": max_streak,
-    }
 
 
 @app.put("/api/settings/gamification")
 def update_gamification_settings(
     settings: dict,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
 ):
     """
     Обновите настройки геймификации для текущего пользователя.
     Сюда входят флаг включения проверки ИИ и значения XP.
     """
-    user = db.query(User).filter(User.id == current_user.id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    with db.session() as session:
+        user = session.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
 
-    # Update AI verification enabled setting
-    if "ai_verification_enabled" in settings:
-        user.ai_verification_enabled = 1 if settings["ai_verification_enabled"] else 0
+        # Update AI verification enabled setting
+        if "ai_verification_enabled" in settings:
+            user.ai_verification_enabled = (
+                1 if settings["ai_verification_enabled"] else 0
+            )
 
-    db.commit()
-    return {"message": "Settings updated successfully"}
+        session.commit()
+        return {"message": "Settings updated successfully"}
 
 
 # ============================================================
@@ -335,7 +347,6 @@ def update_gamification_settings(
 @app.post("/api/dev/reset-gamification")
 def reset_gamification(
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
 ):
     """
     Development-only endpoint to reset gamification data for the current user.
@@ -343,30 +354,39 @@ def reset_gamification(
     """
     # In a real application, you would check if the environment is development
     # For now, we'll allow it but log a warning
-    logging.warning(
+    logger.warning(
         f"Gamification reset requested by user {current_user.id} in environment"
     )
 
-    # Reset UserStats
-    stats = db.query(UserStats).filter(UserStats.user_id == current_user.id).first()
-    if stats:
-        stats.total_xp = 0
-        stats.current_streak = 0
-        stats.max_streak = 0
-        stats.level = 1
-        stats.last_activity_date = None
+    with db.session() as session:
+        # Reset UserStats
+        stats = (
+            session.query(UserStats)
+            .filter(UserStats.user_id == current_user.id)
+            .first()
+        )
+        if stats:
+            stats.total_xp = 0
+            stats.current_streak = 0
+            stats.max_streak = 0
+            stats.level = 1
+            stats.last_activity_date = None
 
-    # Delete all focus sessions and related data for this user
-    # First delete evidence
-    db.query(FocusEvidence).join(FocusSession).filter(
-        FocusSession.user_id == current_user.id
-    ).delete()
-    # Then delete XP transactions
-    db.query(XPTransaction).filter(XPTransaction.user_id == current_user.id).delete()
-    # Then delete focus sessions
-    db.query(FocusSession).filter(FocusSession.user_id == current_user.id).delete()
+        # Delete all focus sessions and related data for this user
+        # First delete evidence
+        session.query(FocusEvidence).join(FocusSession).filter(
+            FocusSession.user_id == current_user.id
+        ).delete()
+        # Then delete XP transactions
+        session.query(XPTransaction).filter(
+            XPTransaction.user_id == current_user.id
+        ).delete()
+        # Then delete focus sessions
+        session.query(FocusSession).filter(
+            FocusSession.user_id == current_user.id
+        ).delete()
 
-    db.commit()
+        session.commit()
 
     return {"message": "Gamification data reset successfully"}
 
@@ -385,7 +405,7 @@ async def telegram_webhook(
         background_tasks.add_task(telegram_bot_app.process_update, data)
         return {"status": "ok"}
     except Exception as e:
-        logging.error(f"Error processing Telegram webhook: {e}")
+        logger.error(f"Error processing Telegram webhook: {e}")
         return {"status": "error"}
 
 
@@ -474,25 +494,6 @@ frontend_dir = Path(__file__).parent / "web"
 if frontend_dir.is_dir():
     # We'll serve static files via a catch-all route below
     pass
-
-
-# Dependency to get current user from session cookie
-def get_current_user(session_token: Optional[str] = Cookie(None)) -> Optional[User]:
-    if not session_token:
-        return None
-    with db.session() as db_session:
-        return get_user_from_session(db_session, session_token)
-
-
-# Dependency to require authentication
-def get_current_active_user(
-    current_user: Optional[User] = Depends(get_current_user),
-) -> User:
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    if not current_user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
-    return current_user
 
 
 # API routes under /api prefix
@@ -1010,7 +1011,6 @@ async def events_endpoint(
 @app.get("/api/now")
 def get_now(
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
 ):
     """
     Return the current state for the NowBlock.
@@ -1019,93 +1019,96 @@ def get_now(
       - The current visible lesson (if any) when no focus session is active
       - Idle state (no lesson, no focus session)
     """
-    focus_service = FocusService(db)
-    now = datetime.now(timezone.utc)
+    with db.session() as session:
+        focus_service = FocusService(session)
+        now = datetime.now(timezone.utc)
 
-    # Check for an active focus session
-    active_session = focus_service.get_active_session(user_id=current_user.id)
-    if active_session:
-        # Calculate elapsed seconds (productive time, excluding pauses)
-        elapsed_seconds = 0
-        if active_session.ended_at:
-            # Session is completed (shouldn't happen because we check for active, but just in case)
-            end_time = active_session.ended_at
-        else:
-            end_time = now
+        # Check for an active focus session
+        active_session = focus_service.get_active_session(user_id=current_user.id)
+        if active_session:
+            # Calculate elapsed seconds (productive time, excluding pauses)
+            elapsed_seconds = 0
+            if active_session.ended_at:
+                # Session is completed (shouldn't happen because we check for active, but just in case)
+                end_time = active_session.ended_at
+            else:
+                end_time = now
 
-        total_duration = (end_time - active_session.started_at).total_seconds()
-        elapsed_seconds = int(total_duration - active_session.total_paused_seconds)
+            total_duration = (end_time - active_session.started_at).total_seconds()
+            elapsed_seconds = int(total_duration - active_session.total_paused_seconds)
 
-        # Get the lesson if associated
-        lesson = None
-        if active_session.lesson_id:
-            lesson = (
-                db.query(Lesson).filter(Lesson.id == active_session.lesson_id).first()
-            )
+            # Get the lesson if associated
+            lesson = None
+            if active_session.lesson_id:
+                lesson = (
+                    session.query(Lesson)
+                    .filter(Lesson.id == active_session.lesson_id)
+                    .first()
+                )
 
-        lesson_subject = lesson.subject if lesson else ""
-        lesson_description = lesson.description if lesson else ""
+            lesson_subject = lesson.subject if lesson else ""
+            lesson_description = lesson.description if lesson else ""
 
-        return {
-            "type": "focus",
-            "session_id": active_session.id,
-            "status": active_session.status,  # active or paused
-            "lesson_id": active_session.lesson_id,
-            "lesson_subject": lesson_subject,
-            "lesson_description": lesson_description,
-            "goal_text": active_session.goal_text,
-            "started_at": active_session.started_at,
-            "elapsed_seconds": elapsed_seconds,
-            # We don't return xp_preview here because it depends on completion mode and verification.
-            # The frontend can show a generic "Начать" or "Пауза"/"Продолжить"/"Завершить" buttons.
-        }
+            return {
+                "type": "focus",
+                "session_id": active_session.id,
+                "status": active_session.status,  # active or paused
+                "lesson_id": active_session.lesson_id,
+                "lesson_subject": lesson_subject,
+                "lesson_description": lesson_description,
+                "goal_text": active_session.goal_text,
+                "started_at": active_session.started_at,
+                "elapsed_seconds": elapsed_seconds,
+                # We don't return xp_preview here because it depends on completion mode and verification.
+                # The frontend can show a generic "Начать" or "Пауза"/"Продолжить"/"Завершить" buttons.
+            }
 
-    # No active focus session, check for the current visible lesson
-    excluded_categories, excluded_subjects = get_schedule_exclusions(
-        db,
-        current_user.id,
-    )
-
-    lessons = (
-        db.query(Lesson)
-        .filter(
-            Lesson.user_id == current_user.id,
-            Lesson.start_time <= now,
-            Lesson.end_time >= now,
+        # No active focus session, check for the current visible lesson
+        excluded_categories, excluded_subjects = get_schedule_exclusions(
+            session,
+            current_user.id,
         )
-        .order_by(Lesson.start_time)
-        .all()
-    )
 
-    lesson = next(
-        (
-            item
-            for item in lessons
-            if lesson_is_visible(
-                item,
-                excluded_categories,
-                excluded_subjects,
+        lessons = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time <= now,
+                Lesson.end_time >= now,
             )
-        ),
-        None,
-    )
+            .order_by(Lesson.start_time)
+            .all()
+        )
 
-    if lesson:
-        category = normalize_schedule_category(lesson.category)
-        return {
-            "type": "lesson",
-            "lesson_id": lesson.id,
-            "lesson_subject": lesson.subject or "",
-            "lesson_description": lesson.description or "",
-            "time_estimate": (
-                f"{lesson.start_time.strftime('%H:%M')} - "
-                f"{lesson.end_time.strftime('%H:%M')}"
+        lesson = next(
+            (
+                item
+                for item in lessons
+                if lesson_is_visible(
+                    item,
+                    excluded_categories,
+                    excluded_subjects,
+                )
             ),
-            "category": category,
-        }
+            None,
+        )
 
-    # No active focus session and no current lesson
-    return {"type": "idle"}
+        if lesson:
+            category = normalize_schedule_category(lesson.category)
+            return {
+                "type": "lesson",
+                "lesson_id": lesson.id,
+                "lesson_subject": lesson.subject or "",
+                "lesson_description": lesson.description or "",
+                "time_estimate": (
+                    f"{lesson.start_time.strftime('%H:%M')} - "
+                    f"{lesson.end_time.strftime('%H:%M')}"
+                ),
+                "category": category,
+            }
+
+        # No active focus session and no current lesson
+        return {"type": "idle"}
 
 
 # ============================================================

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List
+from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.database.models import FocusSession, FocusEvidence, XPTransaction, UserStats, User, Lesson, ScheduleExclusion
-from app.ai.verification import verify_evidence_against_goal
+from app.database.models import (
+    FocusEvidence,
+    FocusSession,
+    Lesson,
+    ScheduleExclusion,
+    User,
+    UserStats,
+    XPTransaction,
+)
 
 # Import event publishing functions
 from app.main import publish_focus_updated, publish_gamification_updated
@@ -19,7 +26,9 @@ def normalize_schedule_category(category: str) -> str:
     return category.strip().upper()
 
 
-def lesson_is_visible(lesson: Lesson, excluded_categories: set, excluded_subjects: set) -> bool:
+def lesson_is_visible(
+    lesson: Lesson, excluded_categories: set, excluded_subjects: set
+) -> bool:
     """Check if a lesson should be visible based on user's exclusions."""
     if lesson_is_excluded_by_category(lesson, excluded_categories):
         return False
@@ -44,17 +53,20 @@ class FocusService:
     def __init__(self, db_session: Session):
         self.db = db_session
 
-    def start_focus_session(self, user_id: int, goal_text: Optional[str] = None) -> FocusSession:
+    def start_focus_session(
+        self, user_id: int, goal_text: Optional[str] = None
+    ) -> FocusSession:
         """
         Start a new focus session for the user.
         The backend determines the current lesson based on time and user's schedule exclusions.
         If there is already an active session, return it.
         """
         # Check for existing active session
-        active_session = self.db.query(FocusSession).filter(
-            FocusSession.user_id == user_id,
-            FocusSession.status == "active"
-        ).first()
+        active_session = (
+            self.db.query(FocusSession)
+            .filter(FocusSession.user_id == user_id, FocusSession.status == "active")
+            .first()
+        )
         if active_session:
             return active_session
 
@@ -82,11 +94,15 @@ class FocusService:
         """
         Pause an active focus session.
         """
-        session = self.db.query(FocusSession).filter(
-            FocusSession.id == session_id,
-            FocusSession.user_id == user_id,
-            FocusSession.status == "active"
-        ).first()
+        session = (
+            self.db.query(FocusSession)
+            .filter(
+                FocusSession.id == session_id,
+                FocusSession.user_id == user_id,
+                FocusSession.status == "active",
+            )
+            .first()
+        )
         if not session:
             raise ValueError("Active focus session not found")
 
@@ -108,11 +124,15 @@ class FocusService:
         """
         Resume a paused focus session.
         """
-        session = self.db.query(FocusSession).filter(
-            FocusSession.id == session_id,
-            FocusSession.user_id == user_id,
-            FocusSession.status == "paused"
-        ).first()
+        session = (
+            self.db.query(FocusSession)
+            .filter(
+                FocusSession.id == session_id,
+                FocusSession.user_id == user_id,
+                FocusSession.status == "paused",
+            )
+            .first()
+        )
         if not session:
             raise ValueError("Paused focus session not found")
 
@@ -134,33 +154,49 @@ class FocusService:
 
         return session
 
-    def complete_focus_session(self, session_id: int, user_id: int, completion_mode: str = "manual", evidence: Optional[List[dict]] = None) -> FocusSession:
+    def complete_focus_session(
+        self,
+        session_id: int,
+        user_id: int,
+        completion_mode: str = "manual",
+        evidence: Optional[List[dict]] = None,
+    ) -> FocusSession:
         """
         Complete a focus session.
         If completion_mode is "manual", we award base XP and set verification_status to "not_required".
         If completion_mode is "ai_verified", we start the AI verification process (asynchronous) and set verification_status to "pending".
         The actual XP awarding for AI verification will happen after the verification completes.
         """
-        session = self.db.query(FocusSession).filter(
-            FocusSession.id == session_id,
-            FocusSession.user_id == user_id,
-            FocusSession.status.in_(["active", "paused"])
-        ).first()
+        session = (
+            self.db.query(FocusSession)
+            .filter(
+                FocusSession.id == session_id,
+                FocusSession.user_id == user_id,
+                FocusSession.status.in_(["active", "paused"]),
+            )
+            .first()
+        )
         if not session:
             raise ValueError("Focus session not found or not in a completable state")
 
         # Check if we have already rewarded XP for this lesson occurrence
         # This prevents farming XP by creating multiple focus sessions for the same lesson
         if session.lesson_id:
-            existing_rewarded_session = self.db.query(FocusSession).filter(
-                FocusSession.user_id == user_id,
-                FocusSession.lesson_id == session.lesson_id,
-                FocusSession.status == "completed",
-                FocusSession.xp_awarded > 0,
-                FocusSession.id != session_id  # Exclude current session
-            ).first()
+            existing_rewarded_session = (
+                self.db.query(FocusSession)
+                .filter(
+                    FocusSession.user_id == user_id,
+                    FocusSession.lesson_id == session.lesson_id,
+                    FocusSession.status == "completed",
+                    FocusSession.xp_awarded > 0,
+                    FocusSession.id != session_id,  # Exclude current session
+                )
+                .first()
+            )
             if existing_rewarded_session:
-                raise ValueError("XP has already been awarded for this lesson occurrence")
+                raise ValueError(
+                    "XP has already been awarded for this lesson occurrence"
+                )
 
         # Set ended_at and calculate duration
         now = datetime.now(timezone.utc)
@@ -181,7 +217,7 @@ class FocusService:
                     focus_session_id=session.id,
                     type=ev["type"],
                     content=ev.get("content", ""),
-                    file_path=ev.get("file_path")
+                    file_path=ev.get("file_path"),
                 )
                 self.db.add(new_evidence)
             session.evidence_provided = True
@@ -205,6 +241,8 @@ class FocusService:
             # We'll commit the session now with pending status, and then the AI verification will update it later.
             self.db.commit()
             self.db.refresh(session)
+            # Publish focus updated event
+            publish_focus_updated(user_id)
             # TODO: Trigger AI verification in the background (e.g., using a background task or a separate process)
             # For now, we'll just return the session and the caller (the API) can trigger the verification.
             # We'll leave the actual verification to the API layer.
@@ -221,7 +259,9 @@ class FocusService:
 
         return session
 
-    def _award_xp(self, user_id: int, amount: int, reason: str, source_id: Optional[int] = None) -> None:
+    def _award_xp(
+        self, user_id: int, amount: int, reason: str, source_id: Optional[int] = None
+    ) -> None:
         """
         Award XP to the user and update UserStats.
         This is called when XP is to be awarded (e.g., after manual completion or after AI verification approval).
@@ -232,7 +272,7 @@ class FocusService:
             amount=amount,
             reason=reason,
             source_type="focus_session",
-            source_id=source_id
+            source_id=source_id,
         )
         self.db.add(xp_transaction)
 
@@ -279,19 +319,21 @@ class FocusService:
         """
         Get the active focus session for the user, if any.
         """
-        return self.db.query(FocusSession).filter(
-            FocusSession.user_id == user_id,
-            FocusSession.status == "active"
-        ).first()
+        return (
+            self.db.query(FocusSession)
+            .filter(FocusSession.user_id == user_id, FocusSession.status == "active")
+            .first()
+        )
 
     def get_session(self, session_id: int, user_id: int) -> Optional[FocusSession]:
         """
         Get a focus session by ID, ensuring it belongs to the user.
         """
-        return self.db.query(FocusSession).filter(
-            FocusSession.id == session_id,
-            FocusSession.user_id == user_id
-        ).first()
+        return (
+            self.db.query(FocusSession)
+            .filter(FocusSession.id == session_id, FocusSession.user_id == user_id)
+            .first()
+        )
 
     def get_current_lesson(self, user_id: int) -> Optional[Lesson]:
         """
@@ -335,22 +377,28 @@ class FocusService:
         Get the user's schedule exclusions as sets of normalized category and subject values.
         Returns (excluded_categories, excluded_subjects).
         """
-        exclusions = self.db.query(ScheduleExclusion).filter(
-            ScheduleExclusion.user_id == user_id
-        ).all()
+        exclusions = (
+            self.db.query(ScheduleExclusion)
+            .filter(ScheduleExclusion.user_id == user_id)
+            .all()
+        )
 
         excluded_categories = set()
         excluded_subjects = set()
 
         for exclusion in exclusions:
             if exclusion.exclusion_type == "category":
-                excluded_categories.add(normalize_schedule_category(exclusion.value_key))
+                excluded_categories.add(
+                    normalize_schedule_category(exclusion.value_key)
+                )
             elif exclusion.exclusion_type == "subject":
                 excluded_subjects.add(exclusion.value_key.lower().strip())
 
         return excluded_categories, excluded_subjects
 
-    def add_evidence(self, session_id: int, user_id: int, evidence: dict) -> FocusEvidence:
+    def add_evidence(
+        self, session_id: int, user_id: int, evidence: dict
+    ) -> FocusEvidence:
         """
         Add evidence to a focus session.
         """
@@ -358,13 +406,15 @@ class FocusService:
         if not session:
             raise ValueError("Focus session not found")
         if session.status not in ["active", "paused"]:
-            raise ValueError("Cannot add evidence to a session that is not active or paused")
+            raise ValueError(
+                "Cannot add evidence to a session that is not active or paused"
+            )
 
         new_evidence = FocusEvidence(
             focus_session_id=session.id,
             type=evidence["type"],
             content=evidence.get("content", ""),
-            file_path=evidence.get("file_path")
+            file_path=evidence.get("file_path"),
         )
         self.db.add(new_evidence)
         session.evidence_provided = True
