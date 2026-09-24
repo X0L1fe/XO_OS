@@ -7,3 +7,50 @@ html,
 body {
   @apply bg-background text-primary;
 }
+:root {
+  --scrollbar-thumb: 22 131 255;       /* accent.blue в RGB */
+  --scrollbar-thumb-opacity: 0.25;
+  --scrollbar-thumb-opacity-hover: 0.5;
+  --scrollbar-thumb-opacity-active: 0.7;
+  --scrollbar-size: 8px;
+}
+
+/* ============================================================
+   Global scrollbar theme
+   ============================================================ */
+
+:where(:not(html):not(body)) {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(22, 131, 255, 0.35) transparent;
+}
+
+:where(:not(html):not(body))::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:where(:not(html):not(body))::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:where(:not(html):not(body))::-webkit-scrollbar-thumb {
+  background-color: rgba(22, 131, 255, 0.25);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 180ms ease;
+}
+
+:where(:not(html):not(body))::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(22, 131, 255, 0.5);
+  background-clip: padding-box;
+}
+
+:where(:not(html):not(body))::-webkit-scrollbar-thumb:active {
+  background-color: rgba(22, 131, 255, 0.7);
+  background-clip: padding-box;
+}
+
+:where(:not(html):not(body))::-webkit-scrollbar-corner {
+  background: transparent;
+}

@@ -1,308 +1,288 @@
-# Graph Report - MAISync  (2026-09-19)
+# Graph Report - XO_OS  (2026-09-24)
 
 ## Corpus Check
-- 98 files · ~132,928 words
+- 67 files · ~83,681 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1044 nodes · 2590 edges · 73 communities (64 shown, 9 thin omitted)
-- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 195 edges (avg confidence: 0.51)
+- 974 nodes · 2668 edges · 73 communities (59 shown, 14 thin omitted)
+- Extraction: 90% EXTRACTED · 10% INFERRED · 0% AMBIGUOUS · INFERRED: 275 edges (avg confidence: 0.52)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `f0b0e28a`
+- Built from commit: `8a56548c`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- forEach
-- main.1e7adafe.js
-- s
-- src_OLD/App.js
-- src/App.js
-- parse_ics
-- telegram/service.py
+- n
+- main.3690f54d.js
+- App.js
 - main.py
-- Xu
-- enterface.md
-- co
-- auth/service.py
-- get_token_path
-- dependencies
-- ss
-- mais_parser.py
-- ObsidianPath
-- Changes Made for MAIS Schedule Parser Layer
-- LessonData
+- parse_ics
+- Yr
+- xi
+- telegram/service.py
+- ii
 - l
-- Выполненные изменения бэкенда
+- Lesson
+- auth/service.py
+- post
+- so
+- LessonData
+- User Guide
+- mais_parser.py
+- Yc
+- dependencies
+- EmailService
+- google_calendar/service.py
+- StatsSection.js
+- normalize_schedule_category
+- al
+- User
+- Learn More
+- Database
+- Settings.js
+- fl
+- EmailChangePage.jsx
+- ScheduleList.js
+- NowBlock.js
+- calculate_diff
+- DonutChart.js
+- PasswordResetPage.jsx
+- index.js
+- Sidebar
 - package.json
-- hl
+- auth/schemas.py
+- web/index.html
 - devDependencies
 - development
 - web/manifest.json
-- User Guide
+- react-scripts
 - public/manifest.json
-- telegram_link
-- EmailService
-- Frontend Fixes for XO_OS
+- export_to_obsidian
 - scripts
+- get_filtered_semester_lessons
 - extends
 - MAISync
-- MAISync
 - MAISync logo (XO in black rounded rectangle)
-- MAISync
-- STATUS
-- TODO
+- documentation
 - README
-- WEB
-- post
-- Xn
-- Learn More
-- nu
-- Da
-- Решение проблемы дублирования в Telegram боте
-- rd
-- Usage
-- Анализ дублирования событий в Google Calendar
-- Telegram Bot for XO_OS
-- Исправлено дублирование событий в Google Calendar
+- MAISync
 - xo_os
-- Fixes Applied
-- react-scripts
 
 ## God Nodes (most connected - your core abstractions)
-1. `l()` - 74 edges
-2. `s()` - 63 edges
-3. `n()` - 49 edges
-4. `User` - 47 edges
-5. `ss()` - 44 edges
-6. `i()` - 32 edges
-7. `hl()` - 29 edges
-8. `rd()` - 27 edges
-9. `LessonData` - 25 edges
-10. `Database` - 24 edges
+1. `l()` - 84 edges
+2. `n()` - 62 edges
+3. `i()` - 57 edges
+4. `s()` - 54 edges
+5. `User` - 51 edges
+6. `ii()` - 46 edges
+7. `so()` - 32 edges
+8. `u()` - 28 edges
+9. `Lesson` - 27 edges
+10. `rd()` - 27 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `get_calendar_service()` --calls--> `get_token_path()`  [EXTRACTED]
+  DEL_DATA.py → app/google_calendar/auth.py
+- `make_new()` --calls--> `LessonData`  [EXTRACTED]
+  tests/test_diff.py → app/ics/parser.py
 - `test_lab_multiple_teachers()` --calls--> `parse_ics()`  [EXTRACTED]
   tests/test_ics_parser.py → app/ics/parser.py
 - `test_lecture_parsing()` --calls--> `parse_ics()`  [EXTRACTED]
   tests/test_ics_parser.py → app/ics/parser.py
-- `get_calendar_service()` --calls--> `get_credentials_path()`  [EXTRACTED]
-  DEL_DATA.py → app/google_calendar/auth.py
-- `get_calendar_service()` --calls--> `get_token_path()`  [EXTRACTED]
-  DEL_DATA.py → app/google_calendar/auth.py
-- `EmailService` --uses--> `Settings`  [INFERRED]
-  app/email/service.py → app/config.py
+- `test_create_update_and_delete()` --calls--> `SyncService`  [EXTRACTED]
+  tests/test_sync.py → app/sync/service.py
 
 ## Import Cycles
 - None detected.
 
-## Communities (73 total, 9 thin omitted)
+## Communities (73 total, 14 thin omitted)
 
-### Community 0 - "forEach"
-Cohesion: 0.11
-Nodes (44): af(), bt(), Cr(), ct(), df(), dt(), ef(), fd() (+36 more)
-
-### Community 1 - "main.1e7adafe.js"
+### Community 0 - "n"
 Cohesion: 0.06
-Nodes (46): ae(), cd(), cs(), dd(), ds(), ee(), eject(), fo() (+38 more)
+Nodes (110): ad(), ae(), b(), Be(), bf(), bt(), C(), ca() (+102 more)
 
-### Community 2 - "s"
-Cohesion: 0.14
-Nodes (41): ar(), c(), Cl(), d(), _e(), et(), g(), h() (+33 more)
+### Community 1 - "main.3690f54d.js"
+Cohesion: 0.05
+Nodes (51): ai(), At(), ba(), bd(), cf(), ci(), clear(), dd() (+43 more)
 
-### Community 3 - "src_OLD/App.js"
-Cohesion: 0.07
-Nodes (20): App(), Achievements(), CalendarObsidianBlock(), Header(), Login(), NowBlock(), Onboarding(), PlayerCard() (+12 more)
+### Community 2 - "App.js"
+Cohesion: 0.13
+Nodes (9): Achievements(), CalendarObsidianBlock(), Header(), Login(), NextEvent(), Onboarding(), PlayerCard(), RecentChanges() (+1 more)
 
-### Community 4 - "src/App.js"
-Cohesion: 0.10
-Nodes (14): App(), Achievements(), CalendarObsidianBlock(), Header(), Login(), NowBlock(), Onboarding(), PlayerCard() (+6 more)
+### Community 3 - "main.py"
+Cohesion: 0.08
+Nodes (41): get_user_from_session(), get_token_path(), Returns the path to the Google OAuth2 token file., get_calendar_status(), get_current_active_user(), get_current_user(), get_google_calendars(), get_mais_groups() (+33 more)
 
-### Community 5 - "parse_ics"
+### Community 4 - "parse_ics"
 Cohesion: 0.11
 Nodes (28): _build_identity_key(), _clean(), _detect_category(), _parse_datetime(), _parse_description(), parse_ics(), Any, datetime (+20 more)
 
-### Community 6 - "telegram/service.py"
+### Community 5 - "Yr"
+Cohesion: 0.08
+Nodes (20): Aa(), af(), Br(), ea(), eject(), Hr(), Ir(), Kr() (+12 more)
+
+### Community 6 - "xi"
+Cohesion: 0.09
+Nodes (37): ac(), ar(), bi(), bu(), cc(), dc(), ec(), fc() (+29 more)
+
+### Community 7 - "telegram/service.py"
 Cohesion: 0.12
 Nodes (29): TelegramLinkCode, error_handler(), handle_document(), handle_link_code(), handle_start(), main(), process_ics_content(), Handle incoming document messages (expected to be ICS files). (+21 more)
 
-### Community 7 - "main.py"
-Cohesion: 0.08
-Nodes (47): get_user_from_session(), Settings, User, export_to_obsidian(), get_achievements(), get_calendar_status(), get_current_active_user(), get_current_user() (+39 more)
+### Community 8 - "ii"
+Cohesion: 0.11
+Nodes (33): bl(), Bs(), De(), ei(), El(), eu(), ga(), Gc() (+25 more)
 
-### Community 8 - "Xu"
-Cohesion: 0.24
-Nodes (16): ac(), cc(), ce(), dc(), Dr(), ec(), fc(), ic() (+8 more)
+### Community 9 - "l"
+Cohesion: 0.15
+Nodes (32): ao(), bo(), Cl(), co(), eo(), fo(), go(), ho() (+24 more)
 
-### Community 9 - "enterface.md"
-Cohesion: 0.06
-Nodes (32): 10. Расписание, 11. Следующее событие, 12. Главный статистический блок, 13. Динамика нагрузки, 14. Top Subjects, 15. План против факта, 16. Достижения, 17. Streak (+24 more)
-
-### Community 10 - "co"
-Cohesion: 0.08
-Nodes (50): ai(), ao(), Bi(), bo(), ci(), co(), componentDidCatch(), di() (+42 more)
+### Community 10 - "Lesson"
+Cohesion: 0.14
+Nodes (18): Lesson, DiffResult, LessonChange, Результат сравнения одного занятия. kind: CREATED UPDATED MOVED DELETED…, Человекочитаемое описание изменения., _apply_lesson_data(), _create_lesson(), GoogleCalendarServiceProtocol (+10 more)
 
 ### Community 11 - "auth/service.py"
-Cohesion: 0.15
-Nodes (25): authenticate_user(), confirm_email_change(), create_session(), create_user(), delete_session(), get_password_hash(), initiate_email_change(), initiate_password_reset() (+17 more)
-
-### Community 12 - "get_token_path"
-Cohesion: 0.13
-Nodes (22): get_credentials_path(), get_data_dir(), get_google_calendar_service(), get_token_path(), Returns the directory where application data is stored. Uses the same directory…, Returns the path to the Google OAuth2 client secrets file., Returns the path to the Google OAuth2 token file., Authenticates with Google Calendar API and returns a service object. Handles… (+14 more)
-
-### Community 13 - "dependencies"
-Cohesion: 0.10
-Nodes (21): axios, react, react-dom, react-icons, react-router-dom, @testing-library/dom, @testing-library/jest-dom, @testing-library/react (+13 more)
-
-### Community 14 - "ss"
-Cohesion: 0.21
-Nodes (16): A(), ba(), bc(), ca(), es(), Ja(), ka(), Pa() (+8 more)
-
-### Community 15 - "mais_parser.py"
-Cohesion: 0.09
-Nodes (24): check_mais_schedule_for_user(), get_mais_groups(), import_mais_schedule(), periodic_mais_check(), Check for schedule changes for a specific user and create notifications if…, Background task that periodically checks for MAIS schedule changes for all…, Get list of MAIS groups., Import schedule for a given MAIS group name. (+16 more)
-
-### Community 16 - "ObsidianPath"
 Cohesion: 0.18
-Nodes (16): AuthStatusResponse, Config, BaseModel, TokenResponse, UserBase, UserCreate, UserLogin, UserResponse (+8 more)
+Nodes (22): UserLogin, authenticate_user(), confirm_email_change(), create_session(), create_user(), delete_session(), get_password_hash(), initiate_email_change() (+14 more)
 
-### Community 17 - "Changes Made for MAIS Schedule Parser Layer"
+### Community 12 - "post"
+Cohesion: 0.09
+Nodes (27): complete_onboarding(), confirm_email_change_endpoint(), echo(), google_callback(), initiate_email_change_endpoint(), initiate_password_reset_endpoint(), mark_notification_as_read(), Set the MAIS group for the current user. (+19 more)
+
+### Community 13 - "so"
 Cohesion: 0.13
-Nodes (14): 1. Google Calendar Service Formatting (`app/google_calendar/service.py`), 2. Database Model Extensions (`app/database/models.py`), 3. Background Task for Periodic Checking (`app/main.py`), 4. API Endpoints (`app/main.py`), 5. MAIS Parser Enhancements (`app/mais_parser.py`), 6. Imports and Dependencies (`app/main.py`), Changes Made for MAIS Schedule Parser Layer, How It Works (+6 more)
+Nodes (21): A(), as(), componentDidCatch(), constructor(), ds(), en(), Fe(), fs() (+13 more)
 
-### Community 18 - "LessonData"
-Cohesion: 0.05
-Nodes (69): build_parser(), cmd_export(), cmd_import_ics(), cmd_stats(), cmd_status(), main(), Export lessons to Obsidian., Show user statistics. (+61 more)
+### Community 14 - "LessonData"
+Cohesion: 0.21
+Nodes (14): LessonData, Нормализованное занятие MAISync. source_uid: Оригинальный UID из ICS. Сохраняем…, Совместимость с предыдущей версией проекта. В будущем лучше везде перейти на…, Хэш всех изменяемых данных занятия. Если хэш поменялся — занятие необходимо…, _as_local(), _date_distance_days(), _find_best_match(), _lesson_score() (+6 more)
 
-### Community 19 - "l"
-Cohesion: 0.14
-Nodes (27): b(), bd(), gc(), gf(), gs(), hc(), Hr(), il() (+19 more)
-
-### Community 20 - "Выполненные изменения бэкенда"
-Cohesion: 0.15
-Nodes (12): 1. Исправлена ошибка сравнения дат (`can't compare offset-naive and offset-aware datetimes`), 2. Изменён метод эндпоинта подтверждения email на GET с параметром в query string, 3. Устранена причина 500‑ошибки при регистрации, 4. Переименован импорт функции проверки email для избежания конфликта имён, 5. Обновлён граф знаний, Header.js, Sidebar.js, Выполненные изменения бэкенда (+4 more)
-
-### Community 21 - "package.json"
-Cohesion: 0.20
-Nodes (9): author, description, keywords, license, main, name, private, proxy (+1 more)
-
-### Community 22 - "hl"
-Cohesion: 0.13
-Nodes (24): al(), At(), bl(), clear(), De(), dl(), el(), fl() (+16 more)
-
-### Community 23 - "devDependencies"
-Cohesion: 0.22
-Nodes (9): autoprefixer, @craco/craco, postcss, devDependencies, autoprefixer, @craco/craco, postcss, tailwindcss (+1 more)
-
-### Community 24 - "development"
-Cohesion: 0.22
-Nodes (9): >0.2%, last 1 chrome version, last 1 firefox version, last 1 safari version, not dead, not op_mini all, browserslist, development (+1 more)
-
-### Community 25 - "web/manifest.json"
-Cohesion: 0.25
-Nodes (7): background_color, display, icons, name, short_name, start_url, theme_color
-
-### Community 26 - "User Guide"
+### Community 15 - "User Guide"
 Cohesion: 0.09
 Nodes (21): API Description, Architecture Overview, CLI Commands, Conflict Resolution, Dependencies, Environment Variables, License, Main Components (+13 more)
 
-### Community 27 - "public/manifest.json"
-Cohesion: 0.25
-Nodes (7): background_color, display, icons, name, short_name, start_url, theme_color
+### Community 16 - "mais_parser.py"
+Cohesion: 0.15
+Nodes (14): import_mais_schedule(), Import schedule for a given MAIS group name., async_fetch_group_schedule(), async_fetch_groups(), fetch_group_schedule(), _parse_date(), parse_mais_schedule(), _parse_time() (+6 more)
 
-### Community 28 - "telegram_link"
-Cohesion: 0.28
-Nodes (8): Создаёт одноразовый код привязки учетной записи Telegram и создаёт Telegram…, Unlink Telegram account., telegram_link(), telegram_unlink(), BaseModel, TelegramLinkResponse, TelegramStatusResponse, TelegramUnlinkResponse
+### Community 17 - "Yc"
+Cohesion: 0.19
+Nodes (19): au(), cu(), Dr(), du(), fu(), hu(), io(), mu() (+11 more)
 
-### Community 29 - "EmailService"
-Cohesion: 0.21
-Nodes (7): EmailService, Отправьте электронное письмо для сброса пароля. Args: email: адрес электронной…, Сервис для отправки писем по SMTP., Отправьте электронное письмо с запросом подтверждения смены email. Args: email:…, Отправьте электронное письмо с подтверждением новой электронной почты. Args:…, Render a Jinja2 template with the given context. Args: template_name: Name of…, Отправьте электронное письмо с подтверждением регистрации. Args: email: адрес…
+### Community 18 - "dependencies"
+Cohesion: 0.10
+Nodes (21): axios, react, react-dom, react-icons, react-router-dom, @testing-library/dom, @testing-library/jest-dom, @testing-library/react (+13 more)
 
-### Community 30 - "Frontend Fixes for XO_OS"
-Cohesion: 0.29
-Nodes (6): Changes Made, Frontend Fixes for XO_OS, Header.js (`xo-os-web/src/components/Header.js`), How It Works, Notes, Sidebar.js (`xo-os-web/src/components/Sidebar.js`)
+### Community 19 - "EmailService"
+Cohesion: 0.18
+Nodes (8): Settings, EmailService, Отправьте электронное письмо для сброса пароля. Args: email: адрес электронной…, Сервис для отправки писем по SMTP., Отправьте электронное письмо с запросом подтверждения смены email. Args: email:…, Отправьте электронное письмо с подтверждением новой электронной почты. Args:…, Render a Jinja2 template with the given context. Args: template_name: Name of…, Отправьте электронное письмо с подтверждением регистрации. Args: email: адрес…
 
-### Community 31 - "scripts"
-Cohesion: 0.40
-Nodes (5): scripts, build, eject, start, test
+### Community 20 - "google_calendar/service.py"
+Cohesion: 0.09
+Nodes (23): get_credentials_path(), get_data_dir(), get_google_calendar_service(), Returns the directory where application data is stored. Uses the same directory…, Returns the path to the Google OAuth2 client secrets file., Authenticates with Google Calendar API and returns a service object. Handles…, _event_to_lesson_key(), _lesson_to_google_event() (+15 more)
 
-### Community 32 - "extends"
-Cohesion: 0.50
-Nodes (4): react-app, react-app/jest, eslintConfig, extends
+### Community 21 - "StatsSection.js"
+Cohesion: 0.17
+Nodes (7): formatNumber(), PlanFact(), StatsSection(), formatNumber(), TopSubjects(), formatNumber(), WeeklyChart()
 
-### Community 33 - "MAISync"
-Cohesion: 0.67
-Nodes (3): App, MAISync, Web
+### Community 22 - "normalize_schedule_category"
+Cohesion: 0.19
+Nodes (14): get_now(), get_schedule(), get_schedule_filters(), lesson_is_visible(), normalize_schedule_category(), normalize_schedule_value(), Возвращает ближайшие занятия текущего пользователя с учётом персональных…, Normalize a schedule value for comparison. Example: " Программирование " ->… (+6 more)
 
-### Community 53 - "post"
-Cohesion: 0.12
-Nodes (21): complete_onboarding(), confirm_email_change_endpoint(), echo(), google_disconnect(), initiate_email_change_endpoint(), initiate_password_reset_endpoint(), mark_notification_as_read(), Complete onboarding by saving group and calendar selection. (+13 more)
+### Community 23 - "al"
+Cohesion: 0.17
+Nodes (10): al(), An(), bn(), dl(), Gl(), il(), ma(), ql() (+2 more)
 
-### Community 54 - "Xn"
-Cohesion: 0.05
-Nodes (31): as(), bf(), Br(), constructor(), eo(), $f(), Gn(), hf() (+23 more)
+### Community 24 - "User"
+Cohesion: 0.18
+Nodes (20): Base, Notification, Исключение из отображения расписания пользователя. exclusion_type: - "category"…, ScheduleExclusion, Session, User, UserStats, check_mais_schedule_for_user() (+12 more)
 
-### Community 55 - "Learn More"
+### Community 25 - "Learn More"
 Cohesion: 0.14
 Nodes (13): Advanced Configuration, Analyzing the Bundle Size, Available Scripts, Code Splitting, Deployment, Getting Started with Create React App, Learn More, Making a Progressive Web App (+5 more)
 
-### Community 56 - "nu"
-Cohesion: 0.20
-Nodes (17): au(), Be(), bs(), cu(), du(), eu(), fu(), kc() (+9 more)
+### Community 26 - "Database"
+Cohesion: 0.19
+Nodes (15): build_parser(), cmd_export(), cmd_import_ics(), cmd_stats(), cmd_status(), main(), Export lessons to Obsidian., Show user statistics. (+7 more)
 
-### Community 57 - "Da"
-Cohesion: 0.23
-Nodes (3): Aa(), Da(), oi()
-
-### Community 58 - "Решение проблемы дублирования в Telegram боте"
-Cohesion: 0.20
-Nodes (9): Альтернативный подход (если subprocess нежелателен):, Анализ проблемы, Изменения в `app/telegram_bot.py`, Предлагаемое решение, Преимущества этого подхода:, Причина проблемы, Решение проблемы дублирования в Telegram боте, Следующие шаги: (+1 more)
-
-### Community 59 - "rd"
-Cohesion: 0.27
-Nodes (11): ad(), An(), Fn(), fr(), id(), It(), ld(), Ln() (+3 more)
-
-### Community 60 - "Usage"
-Cohesion: 0.25
-Nodes (7): Changes Made, Current State, Google Calendar Setup, Installation, Running, Usage, XO_OS - Google Calendar Integration Summary
-
-### Community 61 - "Анализ дублирования событий в Google Calendar"
-Cohesion: 0.29
-Nodes (6): Анализ дублирования событий в Google Calendar, Как проверить, какой случай у вас есть:, Почему вы всё ещё видите дублирование:, Следующие шаги:, Что можно сделать:, Что я проверил и исправил:
-
-### Community 62 - "Telegram Bot for XO_OS"
-Cohesion: 0.29
-Nodes (6): Direct URL fetch (optional), Forwarding from external bot, How it works, Setup, Telegram Bot for XO_OS, Usage
-
-### Community 63 - "Исправлено дублирование событий в Google Calendar"
+### Community 30 - "ScheduleList.js"
 Cohesion: 0.40
-Nodes (4): Дополнительные рекомендации для полной уверенности:, Изменения в файле `app/google_calendar/service.py`:, Исправлено дублирование событий в Google Calendar, Как это решает проблему дублирования:
+Nodes (3): DEFAULT_CATEGORIES, getPluralForm(), ScheduleList()
 
-### Community 69 - "Fixes Applied"
+### Community 31 - "NowBlock.js"
+Cohesion: 0.60
+Nodes (4): EMPTY_NOW, formatCurrentTime(), formatLessonType(), NowBlock()
+
+### Community 32 - "calculate_diff"
+Cohesion: 0.53
+Nodes (9): calculate_diff(), Сравнивает старое состояние с новым. Алгоритм: 1. Exact match по identity_key.…, make_new(), make_old(), test_date_change_is_moved(), test_exact_identity_is_updated(), test_new_lesson_is_created(), test_time_change_is_moved() (+1 more)
+
+### Community 33 - "DonutChart.js"
+Cohesion: 0.50
+Nodes (3): COLORS, DonutChart(), formatNumber()
+
+### Community 37 - "package.json"
+Cohesion: 0.20
+Nodes (9): author, description, keywords, license, main, name, private, proxy (+1 more)
+
+### Community 38 - "auth/schemas.py"
+Cohesion: 0.29
+Nodes (9): AuthStatusResponse, Config, BaseModel, TokenResponse, UserBase, UserCreate, UserResponse, auth_status() (+1 more)
+
+### Community 40 - "devDependencies"
+Cohesion: 0.22
+Nodes (9): autoprefixer, @craco/craco, postcss, devDependencies, autoprefixer, @craco/craco, postcss, tailwindcss (+1 more)
+
+### Community 41 - "development"
+Cohesion: 0.22
+Nodes (9): >0.2%, last 1 chrome version, last 1 firefox version, last 1 safari version, not dead, not op_mini all, browserslist, development (+1 more)
+
+### Community 42 - "web/manifest.json"
 Cohesion: 0.25
-Nodes (7): 1. Email Verification Endpoint, 2. Registration Endpoint, 3. Import Alias, 4. Graph Update, Expected Results, Fixes Applied, Prerequisites
+Nodes (7): background_color, display, icons, name, short_name, start_url, theme_color
+
+### Community 45 - "public/manifest.json"
+Cohesion: 0.25
+Nodes (7): background_color, display, icons, name, short_name, start_url, theme_color
+
+### Community 49 - "export_to_obsidian"
+Cohesion: 0.20
+Nodes (10): export_to_obsidian(), get_current_user_info(), get_obsidian_path(), get_obsidian_vault_path(), logout(), Any, Get saved Obsidian vault path., Экспортируйте занятия в Obsidian. (+2 more)
+
+### Community 52 - "scripts"
+Cohesion: 0.40
+Nodes (5): scripts, build, eject, start, test
+
+### Community 53 - "get_filtered_semester_lessons"
+Cohesion: 0.11
+Nodes (25): _as_aware_utc(), clipped_lesson_duration_hours(), get_filtered_semester_lessons(), get_plan_fact(), get_schedule_exclusions(), get_semester_bounds(), get_semester_stats(), get_top_subjects() (+17 more)
+
+### Community 54 - "extends"
+Cohesion: 0.50
+Nodes (4): react-app, react-app/jest, eslintConfig, extends
 
 ## Knowledge Gaps
-- **174 isolated node(s):** `Config`, `short_name`, `name`, `icons`, `start_url` (+169 more)
+- **89 isolated node(s):** `Config`, `short_name`, `name`, `icons`, `start_url` (+84 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **9 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **14 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `User` connect `main.py` to `telegram/service.py`, `auth/service.py`, `get_token_path`, `mais_parser.py`, `ObsidianPath`, `LessonData`, `post`, `telegram_link`?**
-  _High betweenness centrality (0.015) - this node is a cross-community bridge._
-- **Why does `SyncService` connect `LessonData` to `mais_parser.py`, `main.py`?**
-  _High betweenness centrality (0.014) - this node is a cross-community bridge._
-- **Why does `EmailService` connect `EmailService` to `ObsidianPath`, `auth/service.py`, `post`, `main.py`?**
-  _High betweenness centrality (0.013) - this node is a cross-community bridge._
-- **Are the 16 inferred relationships involving `l()` (e.g. with `b()` and `c()`) actually correct?**
-  _`l()` has 16 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 8 inferred relationships involving `s()` (e.g. with `hd()` and `mf()`) actually correct?**
-  _`s()` has 8 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 31 inferred relationships involving `n()` (e.g. with `ad()` and `ci()`) actually correct?**
-  _`n()` has 31 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 4 inferred relationships involving `User` (e.g. with `ObsidianPath` and `GoogleCalendarServiceProtocol`) actually correct?**
-  _`User` has 4 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `User` connect `User` to `main.py`, `auth/schemas.py`, `telegram/service.py`, `Lesson`, `auth/service.py`, `post`, `mais_parser.py`, `export_to_obsidian`, `get_filtered_semester_lessons`, `normalize_schedule_category`, `Database`?**
+  _High betweenness centrality (0.016) - this node is a cross-community bridge._
+- **Why does `parse_ics()` connect `parse_ics` to `Lesson`, `LessonData`?**
+  _High betweenness centrality (0.012) - this node is a cross-community bridge._
+- **Why does `Database` connect `Database` to `main.py`, `telegram/service.py`, `Lesson`, `google_calendar/service.py`, `get_filtered_semester_lessons`, `User`?**
+  _High betweenness centrality (0.012) - this node is a cross-community bridge._
+- **Are the 19 inferred relationships involving `l()` (e.g. with `ea()` and `_f()`) actually correct?**
+  _`l()` has 19 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 43 inferred relationships involving `n()` (e.g. with `A()` and `ad()`) actually correct?**
+  _`n()` has 43 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 8 inferred relationships involving `i()` (e.g. with `A()` and `cu()`) actually correct?**
+  _`i()` has 8 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 21 inferred relationships involving `s()` (e.g. with `bu()` and `cu()`) actually correct?**
+  _`s()` has 21 INFERRED edges - model-reasoned connections that need verification._

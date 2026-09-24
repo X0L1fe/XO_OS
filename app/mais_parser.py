@@ -60,7 +60,7 @@ def parse_mais_schedule(
     type_mapping = {
         "ЛК": "LECTURE",
         "ПЗ": "PRACTICE",
-        "ЛБ": "LAB",
+        "ЛР": "LAB",
         "ЭК": "EXAM",
     }
 

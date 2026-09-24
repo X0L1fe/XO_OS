@@ -1,3 +1,0 @@
-Fixed datetime comparison in verify_email, verify_and_reset_password, and confirm_email_change functions.
-Added handling for naive datetimes (assumed UTC) when checking token expiration.
-This resolves the "can't compare offset-naive and offset-aware datetimes" error.

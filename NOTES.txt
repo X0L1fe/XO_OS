@@ -1,1 +1,0 @@
-Fixes applied: verification endpoint now expects token in body, registration endpoint uses manual user response to avoid serialization errors. All modules compile successfully.

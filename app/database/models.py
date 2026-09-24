@@ -134,6 +134,10 @@ class User(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    schedule_exclusions: Mapped[List["ScheduleExclusion"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class TelegramLinkCode(Base):
@@ -378,3 +382,68 @@ class Lesson(Base):
         index=True,
     )
     user: Mapped["User"] = relationship()
+
+
+class ScheduleExclusion(Base):
+    """
+    Исключение из отображения расписания пользователя.
+
+    exclusion_type:
+        - "category" — исключить категорию
+        - "subject"  — исключить предмет
+
+    value_key:
+        Нормализованное значение, по которому выполняется сравнение.
+
+    value_label:
+        Человекочитаемое значение для интерфейса.
+    """
+
+    __tablename__ = "schedule_exclusions"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+
+    exclusion_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        index=True,
+    )
+
+    value_key: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+    )
+
+    value_label: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    user: Mapped["User"] = relationship(
+        back_populates="schedule_exclusions",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "exclusion_type",
+            "value_key",
+            name="uq_schedule_exclusion_user_type_key",
+        ),
+    )

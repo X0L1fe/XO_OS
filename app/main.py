@@ -50,7 +50,13 @@ from app.auth.service import (
 )
 from app.config import Settings
 from app.database.db import Database
-from app.database.models import Lesson, Notification, User, UserStats
+from app.database.models import (
+    Lesson,
+    Notification,
+    ScheduleExclusion,
+    User,
+    UserStats,
+)
 from app.email.service import EmailService
 from app.mais_parser import (
     async_fetch_group_schedule,
@@ -74,7 +80,12 @@ from app.telegram.service import (
 try:
     from google_auth_oauthlib.flow import Flow
 
-    from app.google_calendar.auth import SCOPES, get_credentials_path, get_token_path, get_google_calendar_service
+    from app.google_calendar.auth import (
+        SCOPES,
+        get_credentials_path,
+        get_google_calendar_service,
+        get_token_path,
+    )
     from app.google_calendar.service import GoogleCalendarSyncService
 
     GOOGLE_OAUTH_AVAILABLE = True
@@ -100,6 +111,69 @@ db = Database()
 settings = Settings()
 # Obsidian vault path configuration
 OBSIDIAN_CONFIG_PATH = Path("data/obsidian_config.json")
+
+# ============================================================
+# SCHEDULE FILTERS
+# ============================================================
+
+SCHEDULE_CATEGORY_LABELS = {
+    "REGULAR": "Обычные занятия",
+    "ELECTIVE": "Элективы",
+    "MILITARY": "Военная подготовка",
+}
+
+
+class ScheduleFiltersRequest(BaseModel):
+    excluded_categories: list[str] = []
+    excluded_subjects: list[str] = []
+
+
+def normalize_schedule_value(value: str | None) -> str:
+    """
+    Нормализует значение для хранения и сравнения.
+
+    Пример:
+        " История " -> "ИСТОРИЯ"
+        "Военная подготовка" -> "ВОЕННАЯ ПОДГОТОВКА"
+    """
+    if not value:
+        return ""
+
+    return " ".join(value.strip().split()).upper()
+
+
+def normalize_schedule_category(value: str | None) -> str:
+    """
+    Нормализует категорию занятия.
+    Пустая/неизвестная категория считается REGULAR.
+    """
+    normalized = normalize_schedule_value(value)
+
+    if not normalized:
+        return "REGULAR"
+
+    if normalized in {
+        "MILITARY",
+        "ВОЕННАЯ",
+        "ВОЕННАЯ ПОДГОТОВКА",
+    }:
+        return "MILITARY"
+
+    if normalized in {
+        "ELECTIVE",
+        "ЭЛЕКТИВ",
+        "ЭЛЕКТИВЫ",
+    }:
+        return "ELECTIVE"
+
+    if normalized in {
+        "REGULAR",
+        "ОБЫЧНЫЕ",
+        "ОБЫЧНЫЕ ЗАНЯТИЯ",
+    }:
+        return "REGULAR"
+
+    return normalized
 
 
 def get_obsidian_vault_path() -> Optional[str]:
@@ -643,13 +717,25 @@ def get_stats(current_user: User = Depends(get_current_active_user)):
 
 
 @app.get("/api/now")
-def get_now(current_user: User = Depends(get_current_active_user)):
-    """Get current lesson if any."""
-    from datetime import datetime, timezone
+def get_now(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Вернуть текущий видимый урок для пользователя.
+
+    Здесь также применяются исключения из расписания, поэтому NowBlock
+    остается согласованным с ScheduleList и статистикой.
+    """
 
     now = datetime.now(timezone.utc)
+
     with db.session() as session:
-        lesson = (
+        excluded_categories, excluded_subjects = get_schedule_exclusions(
+            session,
+            current_user.id,
+        )
+
+        lessons = (
             session.query(Lesson)
             .filter(
                 Lesson.user_id == current_user.id,
@@ -657,177 +743,861 @@ def get_now(current_user: User = Depends(get_current_active_user)):
                 Lesson.end_time >= now,
             )
             .order_by(Lesson.start_time)
-            .first()
+            .all()
         )
+
+        lesson = next(
+            (
+                item
+                for item in lessons
+                if lesson_is_visible(
+                    item,
+                    excluded_categories,
+                    excluded_subjects,
+                )
+            ),
+            None,
+        )
+
         if lesson:
+            category = normalize_schedule_category(lesson.category)
+
             return {
-                "taskTitle": lesson.subject,
+                "taskTitle": lesson.subject or "",
                 "taskDesc": lesson.description or "",
-                "timeEstimate": f"{lesson.start_time.strftime('%H:%M')} - {lesson.end_time.strftime('%H:%M')}",
-                "priority": lesson.lesson_type,
-                "xpReward": 10,  # XP per lesson as in sync service
-                "time": lesson.start_time.strftime("%H:%M"),
+                "timeEstimate": (
+                    f"{lesson.start_time.strftime('%H:%M')} - "
+                    f"{lesson.end_time.strftime('%H:%M')}"
+                ),
+                "priority": lesson.lesson_type or "",
+                "xpReward": 10,
+                "time": now.strftime("%H:%M"),
+                "currentTime": now.strftime("%H:%M"),
+                "startTime": lesson.start_time.strftime("%H:%M"),
+                "endTime": lesson.end_time.strftime("%H:%M"),
+                "category": category,
             }
-        # No current lesson
+
         return {
             "taskTitle": "",
             "taskDesc": "",
             "timeEstimate": "",
             "priority": "",
             "xpReward": 0,
-            "time": "--:--",
+            "time": now.strftime("%H:%M"),
+            "currentTime": now.strftime("%H:%M"),
+            "startTime": "",
+            "endTime": "",
+            "category": "",
+        }
+
+
+# ============================================================
+# SCHEDULE FILTERS API
+# ============================================================
+
+
+@app.get("/api/schedule/filters")
+def get_schedule_filters(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Возвращает:
+    - доступные категории;
+    - доступные предметы;
+    - текущие исключения пользователя.
+    """
+
+    with db.session() as session:
+        lessons = (
+            session.query(Lesson)
+            .filter(Lesson.user_id == current_user.id)
+            .order_by(Lesson.subject.asc())
+            .all()
+        )
+
+        exclusions = (
+            session.query(ScheduleExclusion)
+            .filter(ScheduleExclusion.user_id == current_user.id)
+            .all()
+        )
+
+        excluded_categories = set()
+        excluded_subjects = set()
+
+        for exclusion in exclusions:
+            if exclusion.exclusion_type == "category":
+                excluded_categories.add(exclusion.value_key)
+
+            elif exclusion.exclusion_type == "subject":
+                excluded_subjects.add(exclusion.value_key)
+
+        # Собираем уникальные категории из реального расписания.
+        available_categories = set()
+
+        for lesson in lessons:
+            available_categories.add(normalize_schedule_category(lesson.category))
+
+        # Всегда показываем основные категории,
+        # даже если конкретной категории сейчас нет.
+        for category in SCHEDULE_CATEGORY_LABELS:
+            available_categories.add(category)
+
+        categories = []
+
+        for category in [
+            "REGULAR",
+            "ELECTIVE",
+            "MILITARY",
+        ]:
+            if category in available_categories:
+                categories.append(
+                    {
+                        "key": category,
+                        "label": SCHEDULE_CATEGORY_LABELS[category],
+                        "excluded": category in excluded_categories,
+                    }
+                )
+
+        # Уникальные предметы.
+        subjects_by_key = {}
+
+        for lesson in lessons:
+            if not lesson.subject:
+                continue
+
+            label = " ".join(lesson.subject.strip().split())
+
+            key = normalize_schedule_value(label)
+
+            if not key:
+                continue
+
+            if key not in subjects_by_key:
+                subjects_by_key[key] = label
+
+        subjects = [
+            {
+                "key": key,
+                "label": label,
+                "excluded": key in excluded_subjects,
+            }
+            for key, label in sorted(
+                subjects_by_key.items(),
+                key=lambda item: item[1].lower(),
+            )
+        ]
+
+        return {
+            "excluded_categories": sorted(excluded_categories),
+            "excluded_subjects": sorted(excluded_subjects),
+            "categories": categories,
+            "subjects": subjects,
+        }
+
+
+@app.put("/api/schedule/filters")
+def update_schedule_filters(
+    filters: ScheduleFiltersRequest,
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Полностью заменяет набор исключений текущего пользователя.
+
+    Пример:
+
+    {
+        "excluded_categories": ["MILITARY"],
+        "excluded_subjects": [
+            "ИСТОРИЯ",
+            "ФИЛОСОФИЯ"
+        ]
+    }
+    """
+
+    allowed_categories = {
+        "REGULAR",
+        "ELECTIVE",
+        "MILITARY",
+    }
+
+    categories = {
+        normalize_schedule_category(value)
+        for value in filters.excluded_categories
+        if value
+    }
+
+    categories &= allowed_categories
+
+    subjects = {
+        normalize_schedule_value(value) for value in filters.excluded_subjects if value
+    }
+
+    with db.session() as session:
+        existing_exclusions = (
+            session.query(ScheduleExclusion)
+            .filter(ScheduleExclusion.user_id == current_user.id)
+            .all()
+        )
+
+        for exclusion in existing_exclusions:
+            session.delete(exclusion)
+
+        # Категории.
+        for category in sorted(categories):
+            session.add(
+                ScheduleExclusion(
+                    user_id=current_user.id,
+                    exclusion_type="category",
+                    value_key=category,
+                    value_label=SCHEDULE_CATEGORY_LABELS.get(
+                        category,
+                        category,
+                    ),
+                )
+            )
+
+        # Предметы.
+        subject_labels = {}
+
+        lessons = session.query(Lesson).filter(Lesson.user_id == current_user.id).all()
+
+        for lesson in lessons:
+            if not lesson.subject:
+                continue
+
+            normalized = normalize_schedule_value(lesson.subject)
+
+            if normalized and normalized not in subject_labels:
+                subject_labels[normalized] = lesson.subject.strip()
+
+        for subject_key in sorted(subjects):
+            session.add(
+                ScheduleExclusion(
+                    user_id=current_user.id,
+                    exclusion_type="subject",
+                    value_key=subject_key,
+                    value_label=subject_labels.get(
+                        subject_key,
+                        subject_key,
+                    ),
+                )
+            )
+
+        session.commit()
+
+        return {
+            "success": True,
+            "excluded_categories": sorted(categories),
+            "excluded_subjects": sorted(subjects),
         }
 
 
 @app.get("/api/schedule")
-def get_schedule(current_user: User = Depends(get_current_active_user)):
-    """Get upcoming lessons."""
-    from datetime import datetime, timezone
+def get_schedule(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Возвращает ближайшие занятия текущего пользователя
+    с учётом персональных исключений расписания.
+    """
 
     now = datetime.now(timezone.utc)
+
     with db.session() as session:
-        lessons = (
-            session.query(Lesson)
-            .filter(Lesson.user_id == current_user.id, Lesson.start_time >= now)
-            .order_by(Lesson.start_time)
-            .limit(50)
+        exclusions = (
+            session.query(ScheduleExclusion)
+            .filter(ScheduleExclusion.user_id == current_user.id)
             .all()
         )
+
+        excluded_categories = {
+            exclusion.value_key
+            for exclusion in exclusions
+            if exclusion.exclusion_type == "category"
+        }
+
+        excluded_subjects = {
+            exclusion.value_key
+            for exclusion in exclusions
+            if exclusion.exclusion_type == "subject"
+        }
+
+        lessons = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time >= now,
+            )
+            .order_by(Lesson.start_time)
+            .limit(200)
+            .all()
+        )
+
         result = []
+
         for lesson in lessons:
+            category = normalize_schedule_category(lesson.category)
+
+            subject_key = normalize_schedule_value(lesson.subject)
+
+            # Исключение по категории.
+            if category in excluded_categories:
+                continue
+
+            # Исключение по предмету.
+            if subject_key in excluded_subjects:
+                continue
+
             result.append(
                 {
+                    "id": lesson.id,
+                    "stable_id": lesson.stable_id,
                     "time": lesson.start_time.strftime("%H:%M"),
                     "subject": lesson.subject,
                     "type": lesson.lesson_type,
+                    "category": category,
                     "room": lesson.room or "",
                     "teacher": lesson.teacher or "",
-                    "status": "sync" if lesson.google_event_id else "unsynced",
+                    "status": ("sync" if lesson.google_event_id else "unsynced"),
                 }
             )
+
         return result
+
+
+# ============================================================
+# STATISTICS
+# ============================================================
+
+
+def normalize_schedule_value(value: str | None) -> str:
+    """
+    Normalize a schedule value for comparison.
+
+    Example:
+        "  Программирование  " -> "ПРОГРАММИРОВАНИЕ"
+    """
+    if not value:
+        return ""
+
+    return " ".join(str(value).strip().split()).upper()
+
+
+def normalize_schedule_category(value: str | None) -> str:
+    """
+    Normalize lesson category.
+    Unknown categories are preserved as-is.
+    """
+    normalized = normalize_schedule_value(value)
+
+    if not normalized:
+        return "REGULAR"
+
+    category_aliases = {
+        "MILITARY": "MILITARY",
+        "ВОЕННАЯ": "MILITARY",
+        "ВОЕННАЯ ПОДГОТОВКА": "MILITARY",
+        "ELECTIVE": "ELECTIVE",
+        "ЭЛЕКТИВ": "ELECTIVE",
+        "ЭЛЕКТИВЫ": "ELECTIVE",
+        "REGULAR": "REGULAR",
+        "ОБЫЧНЫЕ": "REGULAR",
+        "ОБЫЧНЫЕ ЗАНЯТИЯ": "REGULAR",
+    }
+
+    return category_aliases.get(normalized, normalized)
+
+
+def get_schedule_exclusions(
+    session,
+    user_id: int,
+) -> tuple[set[str], set[str]]:
+    """
+    Return excluded categories and subjects for the current user.
+    """
+
+    exclusions = (
+        session.query(ScheduleExclusion)
+        .filter(ScheduleExclusion.user_id == user_id)
+        .all()
+    )
+
+    excluded_categories = {
+        exclusion.value_key
+        for exclusion in exclusions
+        if exclusion.exclusion_type == "category"
+    }
+
+    excluded_subjects = {
+        exclusion.value_key
+        for exclusion in exclusions
+        if exclusion.exclusion_type == "subject"
+    }
+
+    return excluded_categories, excluded_subjects
+
+
+def lesson_is_visible(
+    lesson: Lesson,
+    excluded_categories: set[str],
+    excluded_subjects: set[str],
+) -> bool:
+    """
+    Return True when lesson should be included in schedule/statistics.
+    """
+
+    category = normalize_schedule_category(lesson.category)
+    subject = normalize_schedule_value(lesson.subject)
+
+    if category in excluded_categories:
+        return False
+
+    if subject and subject in excluded_subjects:
+        return False
+
+    return True
+
+
+def get_semester_bounds(
+    now: datetime,
+) -> tuple[datetime, datetime] | None:
+    """
+    Получение текущие границы академического семестра.
+
+    Текущее соглашение проекта:
+        Весна-лето: 1 февраля – 31 мая.
+        Осень-зима: 1 сентября – 31 декабря.
+
+    Возвращает None в течение июня-августа и января.
+    """
+
+    if 2 <= now.month <= 6:
+        return (
+            datetime(
+                now.year,
+                2,
+                1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                now.year,
+                5,
+                31,
+                23,
+                59,
+                59,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+    if 9 <= now.month <= 12:
+        return (
+            datetime(
+                now.year,
+                9,
+                1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                now.year,
+                12,
+                31,
+                23,
+                59,
+                59,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+    return None
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    """
+    Нормализация времени к UTC формату для сравнения из БД
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def lesson_duration_hours(
+    lesson: Lesson,
+) -> float:
+    """
+    Продолжительность занятий возврата в часах.
+    """
+
+    if not lesson.start_time or not lesson.end_time:
+        return 0.0
+
+    start = _as_aware_utc(lesson.start_time)
+    end = _as_aware_utc(lesson.end_time)
+
+    return max(
+        (end - start).total_seconds() / 3600.0,
+        0.0,
+    )
+
+
+def clipped_lesson_duration_hours(
+    lesson: Lesson,
+    start: datetime,
+    end: datetime,
+) -> float:
+    """
+    Рассчитать только ту часть продолжительности урока, которая лежит
+    внутри [start, end].
+    """
+
+    if not lesson.start_time or not lesson.end_time:
+        return 0.0
+
+    lesson_start = _as_aware_utc(lesson.start_time)
+    lesson_end = _as_aware_utc(lesson.end_time)
+
+    bound_start = _as_aware_utc(start)
+    bound_end = _as_aware_utc(end)
+
+    clipped_start = max(lesson_start, bound_start)
+    clipped_end = min(lesson_end, bound_end)
+
+    if clipped_end <= clipped_start:
+        return 0.0
+
+    return (clipped_end - clipped_start).total_seconds() / 3600.0
+
+
+def get_filtered_semester_lessons(
+    session,
+    current_user: User,
+    now: datetime | None = None,
+) -> tuple[list[Lesson], datetime, datetime] | None:
+    """
+    Получить все видимые уроки в текущем семестре.
+
+    Это общий источник статистики семестра.
+    """
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    bounds = get_semester_bounds(now)
+
+    if bounds is None:
+        return None
+
+    semester_start, semester_end = bounds
+
+    excluded_categories, excluded_subjects = get_schedule_exclusions(
+        session,
+        current_user.id,
+    )
+
+    lessons = (
+        session.query(Lesson)
+        .filter(
+            Lesson.user_id == current_user.id,
+            Lesson.start_time >= semester_start,
+            Lesson.start_time <= semester_end,
+        )
+        .order_by(Lesson.start_time)
+        .all()
+    )
+
+    visible_lessons = [
+        lesson
+        for lesson in lessons
+        if lesson_is_visible(
+            lesson,
+            excluded_categories,
+            excluded_subjects,
+        )
+    ]
+
+    return (
+        visible_lessons,
+        semester_start,
+        semester_end,
+    )
 
 
 @app.get("/api/stats/semester")
-def get_semester_stats(current_user: User = Depends(get_current_active_user)):
-    """Get semester stats."""
-    from datetime import datetime, timedelta, timezone
+def get_semester_stats(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Semester workload in actual hours.
+
+    Filters are applied before calculation.
+    """
 
     now = datetime.now(timezone.utc)
-    # Determine semester boundaries: assuming spring semester Feb-May, autumn Sep-Dec
-    if 2 <= now.month <= 5:
-        # Spring semester: Feb 1 to May 31
-        semester_start = datetime(now.year, 2, 1, tzinfo=timezone.utc)
-        semester_end = datetime(now.year, 5, 31, 23, 59, 59, tzinfo=timezone.utc)
-    elif 9 <= now.month <= 12:
-        # Autumn semester: Sep 1 to Dec 31
-        semester_start = datetime(now.year, 9, 1, tzinfo=timezone.utc)
-        semester_end = datetime(now.year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
-    else:
-        # Jan, Jun-Aug: no semester, return zeros
-        return {"lecture": 0, "practice": 0, "lab": 0, "total": 0}
+
     with db.session() as session:
-        lectures = (
-            session.query(Lesson)
-            .filter(
-                Lesson.user_id == current_user.id,
-                Lesson.start_time >= semester_start,
-                Lesson.start_time <= semester_end,
-                Lesson.lesson_type == "LECTURE",
-            )
-            .count()
+        result = get_filtered_semester_lessons(
+            session,
+            current_user,
+            now,
         )
-        practices = (
-            session.query(Lesson)
-            .filter(
-                Lesson.user_id == current_user.id,
-                Lesson.start_time >= semester_start,
-                Lesson.start_time <= semester_end,
-                Lesson.lesson_type == "PRACTICE",
-            )
-            .count()
-        )
-        labs = (
-            session.query(Lesson)
-            .filter(
-                Lesson.user_id == current_user.id,
-                Lesson.start_time >= semester_start,
-                Lesson.start_time <= semester_end,
-                Lesson.lesson_type == "LAB",
-            )
-            .count()
-        )
-        total = (
-            session.query(Lesson)
-            .filter(
-                Lesson.user_id == current_user.id,
-                Lesson.start_time >= semester_start,
-                Lesson.start_time <= semester_end,
-            )
-            .count()
-        )
-        return {"lecture": lectures, "practice": practices, "lab": labs, "total": total}
+
+        if result is None:
+            return {
+                "lecture": 0,
+                "practice": 0,
+                "lab": 0,
+                "other": 0,
+                "total": 0,
+                "lesson_count": 0,
+            }
+
+        lessons, semester_start, semester_end = result
+
+        hours_by_type = {
+            "lecture": 0.0,
+            "practice": 0.0,
+            "lab": 0.0,
+            "other": 0.0,
+        }
+
+        for lesson in lessons:
+            hours = lesson_duration_hours(lesson)
+
+            lesson_type = normalize_schedule_value(lesson.lesson_type)
+
+            if lesson_type == "LECTURE":
+                hours_by_type["lecture"] += hours
+
+            elif lesson_type == "PRACTICE":
+                hours_by_type["practice"] += hours
+
+            elif lesson_type == "LAB":
+                hours_by_type["lab"] += hours
+
+            else:
+                hours_by_type["other"] += hours
+
+        total = sum(hours_by_type.values())
+
+        return {
+            "lecture": round(
+                hours_by_type["lecture"],
+                2,
+            ),
+            "practice": round(
+                hours_by_type["practice"],
+                2,
+            ),
+            "lab": round(
+                hours_by_type["lab"],
+                2,
+            ),
+            "other": round(
+                hours_by_type["other"],
+                2,
+            ),
+            "total": round(total, 2),
+            "lesson_count": len(lessons),
+        }
 
 
 @app.get("/api/stats/weekly")
-def get_weekly_stats(current_user: User = Depends(get_current_active_user)):
-    """Get weekly hours for the current week."""
-    from datetime import datetime, timedelta, timezone
+def get_weekly_stats(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Workload by every week of the current semester.
+
+    Future weeks are returned with 0 hours so the frontend
+    can display the complete semester timeline.
+    """
 
     now = datetime.now(timezone.utc)
-    # Start of week (Monday)
-    start_of_week = now - timedelta(days=now.weekday())
-    start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_of_week = start_of_week + timedelta(days=7)
+
     with db.session() as session:
-        lessons = (
-            session.query(Lesson)
-            .filter(
-                Lesson.user_id == current_user.id,
-                Lesson.start_time >= start_of_week,
-                Lesson.start_time < end_of_week,
-            )
-            .all()
+        result = get_filtered_semester_lessons(
+            session,
+            current_user,
+            now,
         )
-        total_hours = 0.0
-        for lesson in lessons:
-            duration = (lesson.end_time - lesson.start_time).total_seconds() / 3600.0
-            total_hours += duration
-        # Return as a single week (label '1')
-        return [{"label": "1", "hours": round(total_hours, 2)}]
 
+        if result is None:
+            return []
 
-@app.get("/api/stats/planfact")
-def get_plan_fact(current_user: User = Depends(get_current_active_user)):
-    """Get plan vs fact hours."""
-    # Placeholder: plan/fact tracking not implemented.
-    # Return zeros for all categories.
-    return {
-        "study": {"plan": 0, "fact": 0},
-        "projects": {"plan": 0, "fact": 0},
-        "self": {"plan": 0, "fact": 0},
-    }
+        lessons, semester_start, semester_end = result
+
+        # First week starts on Monday.
+        first_week_start = semester_start - timedelta(days=semester_start.weekday())
+
+        # Make sure we do not start before semester.
+        first_week_start = max(
+            first_week_start,
+            semester_start,
+        )
+
+        weeks = []
+
+        cursor = first_week_start
+        week_number = 1
+
+        while cursor <= semester_end:
+            week_start = cursor
+            week_end = min(
+                cursor + timedelta(days=7),
+                semester_end + timedelta(seconds=1),
+            )
+
+            hours = 0.0
+
+            for lesson in lessons:
+                hours += clipped_lesson_duration_hours(
+                    lesson,
+                    week_start,
+                    week_end,
+                )
+
+            current_week = week_start <= now < week_end
+
+            weeks.append(
+                {
+                    "week": week_number,
+                    "label": str(week_number),
+                    "date_start": week_start.strftime("%d.%m"),
+                    "date_end": (week_end - timedelta(seconds=1)).strftime("%d.%m"),
+                    "hours": round(hours, 2),
+                    "current": current_week,
+                }
+            )
+
+            cursor += timedelta(days=7)
+            week_number += 1
+
+        return weeks
 
 
 @app.get("/api/stats/topsubjects")
-def get_top_subjects(current_user: User = Depends(get_current_active_user)):
-    """Get top subjects by total hours."""
+def get_top_subjects(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Top subjects by actual semester workload.
+
+    Filters are applied before aggregation.
+    """
+
+    now = datetime.now(timezone.utc)
+
     with db.session() as session:
-        lessons = session.query(Lesson).filter(Lesson.user_id == current_user.id).all()
-        subject_hours = {}
+        result = get_filtered_semester_lessons(
+            session,
+            current_user,
+            now,
+        )
+
+        if result is None:
+            return []
+
+        lessons, semester_start, semester_end = result
+
+        subject_stats = {}
+
         for lesson in lessons:
-            duration = (lesson.end_time - lesson.start_time).total_seconds() / 3600.0
-            subject = lesson.subject
-            subject_hours[subject] = subject_hours.get(subject, 0) + duration
-        # Sort descending by hours and take top 5
+            subject = (lesson.subject or "Без названия").strip()
+
+            if not subject:
+                subject = "Без названия"
+
+            if subject not in subject_stats:
+                subject_stats[subject] = {
+                    "hours": 0.0,
+                    "lessons": 0,
+                }
+
+            subject_stats[subject]["hours"] += lesson_duration_hours(lesson)
+
+            subject_stats[subject]["lessons"] += 1
+
         sorted_subjects = sorted(
-            subject_hours.items(), key=lambda x: x[1], reverse=True
+            subject_stats.items(),
+            key=lambda item: item[1]["hours"],
+            reverse=True,
         )[:5]
-        result = [
-            {"name": subject, "hours": round(hours, 2)}
-            for subject, hours in sorted_subjects
+
+        return [
+            {
+                "name": subject,
+                "hours": round(
+                    values["hours"],
+                    2,
+                ),
+                "lessons": values["lessons"],
+            }
+            for subject, values in sorted_subjects
         ]
-        return result
+
+
+@app.get("/api/stats/planfact")
+def get_plan_fact(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Semester progress.
+
+    The old endpoint returned zero placeholders.
+    We now expose actual elapsed and remaining scheduled
+    workload after applying filters.
+
+    completed = portion of scheduled lesson hours that has
+                already passed.
+    remaining = portion still ahead.
+    """
+
+    now = datetime.now(timezone.utc)
+
+    with db.session() as session:
+        result = get_filtered_semester_lessons(
+            session,
+            current_user,
+            now,
+        )
+
+        if result is None:
+            return {
+                "total": 0,
+                "completed": 0,
+                "remaining": 0,
+                "progress_percent": 0,
+            }
+
+        lessons, semester_start, semester_end = result
+
+        total = 0.0
+        completed = 0.0
+
+        for lesson in lessons:
+            total += lesson_duration_hours(lesson)
+
+            completed += clipped_lesson_duration_hours(
+                lesson,
+                semester_start,
+                min(now, semester_end),
+            )
+
+        completed = min(completed, total)
+        remaining = max(total - completed, 0.0)
+
+        progress_percent = (completed / total) * 100 if total > 0 else 0.0
+
+        return {
+            "total": round(total, 2),
+            "completed": round(completed, 2),
+            "remaining": round(remaining, 2),
+            "progress_percent": round(
+                progress_percent,
+                1,
+            ),
+        }
 
 
 @app.get("/api/achievements")
@@ -1009,10 +1779,8 @@ async def get_google_calendars(
     if not GOOGLE_OAUTH_AVAILABLE or get_google_calendar_service is None:
         # Return default primary calendar if Google OAuth is not available
         return {
-            "calendars": [
-                {"id": "primary", "summary": "Основной календарь"}
-            ],
-            "requires_auth": False
+            "calendars": [{"id": "primary", "summary": "Основной календарь"}],
+            "requires_auth": False,
         }
     try:
         # Check if user has Google credentials
@@ -1020,10 +1788,8 @@ async def get_google_calendars(
         if not os.path.exists(token_path):
             # No token file, user not authenticated with Google
             return {
-                "calendars": [
-                    {"id": "primary", "summary": "Основной календарь"}
-                ],
-                "requires_auth": True
+                "calendars": [{"id": "primary", "summary": "Основной календарь"}],
+                "requires_auth": True,
             }
 
         # Try to get the service
@@ -1031,10 +1797,12 @@ async def get_google_calendars(
         calendar_list = service.calendarList().list().execute()
         calendars = []
         for calendar in calendar_list.get("items", []):
-            calendars.append({
-                "id": calendar["id"],
-                "summary": calendar.get("summary", "Без названия")
-            })
+            calendars.append(
+                {
+                    "id": calendar["id"],
+                    "summary": calendar.get("summary", "Без названия"),
+                }
+            )
         # Always include primary calendar as fallback
         if not any(cal["id"] == "primary" for cal in calendars):
             calendars.append({"id": "primary", "summary": "Основной календарь"})
@@ -1042,10 +1810,8 @@ async def get_google_calendars(
     except Exception as e:
         # If there's an error (e.g., not authenticated), return default with auth required
         return {
-            "calendars": [
-                {"id": "primary", "summary": "Основной календарь"}
-            ],
-            "requires_auth": True
+            "calendars": [{"id": "primary", "summary": "Основной календарь"}],
+            "requires_auth": True,
         }
 
 
@@ -1073,8 +1839,7 @@ async def complete_onboarding(
         # Log the error for debugging
         print(f"Error in complete_onboarding: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to complete onboarding: {str(e)}"
+            status_code=500, detail=f"Failed to complete onboarding: {str(e)}"
         )
 
 
@@ -1095,8 +1860,7 @@ async def select_google_calendar(
     except Exception as e:
         print(f"Error in select_google_calendar: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to save calendar selection: {str(e)}"
+            status_code=500, detail=f"Failed to save calendar selection: {str(e)}"
         )
 
 
@@ -1208,7 +1972,12 @@ async def google_status(current_user: User = Depends(get_current_user)):
 
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
             if creds and creds.valid:
-                return {"connected": True, "last_synced_at": current_user.last_synced_at.isoformat() if current_user.last_synced_at else None}
+                return {
+                    "connected": True,
+                    "last_synced_at": current_user.last_synced_at.isoformat()
+                    if current_user.last_synced_at
+                    else None,
+                }
             elif creds and creds.expired and creds.refresh_token:
                 # Try to refresh
                 from google.auth.transport.requests import Request
@@ -1217,7 +1986,12 @@ async def google_status(current_user: User = Depends(get_current_user)):
                 # Save refreshed token
                 with open(token_path, "w") as token_file:
                     token_file.write(creds.to_json())
-                return {"connected": True, "last_synced_at": current_user.last_synced_at.isoformat() if current_user.last_synced_at else None}
+                return {
+                    "connected": True,
+                    "last_synced_at": current_user.last_synced_at.isoformat()
+                    if current_user.last_synced_at
+                    else None,
+                }
         return {"connected": False, "last_synced_at": None}
     except Exception:
         return {"connected": False, "last_synced_at": None}
@@ -1430,7 +2204,9 @@ async def check_mais_schedule_for_user(user: User, session: Session) -> None:
                 )
         except Exception as e:
             # If we fail to create the service, log it and continue without Google Calendar sync
-            print(f"Failed to initialize Google Calendar service for user {user.id}: {e}")
+            print(
+                f"Failed to initialize Google Calendar service for user {user.id}: {e}"
+            )
             google_calendar_service = None
 
         sync_service = SyncService(db, google_calendar_service=google_calendar_service)

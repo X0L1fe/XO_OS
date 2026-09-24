@@ -1,5 +1,0 @@
-- [Onboarding with group and calendar selection](Onboarding component created) - Added two-step onboarding: group selection then calendar selection. Backend endpoints created to handle saving selections.
-- [Google Calendar service update](app/google_calendar/service.py) - Modified to accept calendar_id parameter.
-- [User model update](app/database/models.py) - Added selected_calendar_id field.
-- [Backend endpoints](app/main.py) - Added /api/google/calendars and /api/onboarding/complete. Updated /api/mais/import and background task to use selected calendar.
-- [CSS fix](src/components/StatsSection/WeeklyChart.js) - Fixed calc() expression by replacing underscores with spaces.
