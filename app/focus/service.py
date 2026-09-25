@@ -16,7 +16,7 @@ from app.database.models import (
 )
 
 # Import event publishing functions
-from app.main import publish_focus_updated, publish_gamification_updated
+from app.event import publish_focus_updated, publish_gamification_updated
 
 
 def normalize_schedule_category(category: str) -> str:

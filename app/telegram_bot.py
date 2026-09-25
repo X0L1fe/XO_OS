@@ -19,21 +19,23 @@ Environment variables:
 The bot loads environment variables from a .env file if present.
 """
 
-import os
-import logging
-import subprocess
 import asyncio
+import logging
+import os
+import subprocess
 import tempfile
+
+from dotenv import load_dotenv
 from fastapi import HTTPException
 from telegram import Update
 from telegram.ext import (
     Application,
+    CommandHandler,
+    ContextTypes,
     MessageHandler,
     filters,
-    ContextTypes,
-    CommandHandler,
-    )
-from dotenv import load_dotenv
+)
+
 from app.database.db import Database
 from app.telegram.service import (
     get_user_by_telegram_id,
@@ -47,8 +49,7 @@ load_dotenv()
 
 # Enable logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ GOOGLE_CALENDAR_NAME = os.getenv("GOOGLE_CALENDAR_NAME", "ТЕСТ")
 RECEIVED_ICS_DIR = os.path.join(os.getcwd(), "data", "received_ics")
 os.makedirs(RECEIVED_ICS_DIR, exist_ok=True)
 db = Database()
+
 
 async def handle_link_code(
     update: Update,
@@ -122,19 +124,14 @@ async def handle_link_code(
 
         # Не раскрываем внутренние ошибки пользователю.
         await update.message.reply_text(
-            "❌ Не удалось привязать Telegram. "
-            "Проверьте код и срок его действия."
+            "❌ Не удалось привязать Telegram. Проверьте код и срок его действия."
         )
 
-async def handle_document(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming document messages (expected to be ICS files)."""
     if not update.effective_user:
-        await update.message.reply_text(
-            "Не удалось определить Telegram аккаунт."
-        )
+        await update.message.reply_text("Не удалось определить Telegram аккаунт.")
         return
 
     if not update.message:
@@ -147,7 +144,7 @@ async def handle_document(
     # Check if the document is an ICS file (by filename or mime type)
     filename = document.file_name or ""
     mime_type = document.mime_type or ""
-    if not (filename.lower().endswith('.ics') or mime_type == 'text/calendar'):
+    if not (filename.lower().endswith(".ics") or mime_type == "text/calendar"):
         await update.message.reply_text("Please send an ICS file.")
         return
     # Проверка на привязку ТГ id
@@ -175,17 +172,20 @@ async def handle_document(
         # Save file temporarily
         safe_filename = f"{update.message.message_id}_{filename or 'schedule.ics'}"
         file_path = os.path.join(RECEIVED_ICS_DIR, safe_filename)
-        with open(file_path, 'wb') as f:
+        with open(file_path, "wb") as f:
             f.write(ics_content)
 
         await update.message.reply_text("Importing schedule into XO_OS...")
-        result = await process_ics_content(ics_content, source="Upload", file_path=file_path)
+        result = await process_ics_content(
+            ics_content, source="Upload", file_path=file_path
+        )
         await update.message.reply_text(f"Import result: {result}")
 
     except Exception as e:
         logger.error(f"Error processing document: {e}")
         if update.message:
             await update.message.reply_text(f"Failed to process the document: {e}")
+
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -214,9 +214,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = context.args[0].strip()
 
     if not code:
-        await update.message.reply_text(
-            "Код привязки не указан."
-        )
+        await update.message.reply_text("Код привязки не указан.")
         return
 
     try:
@@ -240,23 +238,22 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     except HTTPException as exc:
-        await update.message.reply_text(
-            f"❌ {exc.detail}"
-        )
+        await update.message.reply_text(f"❌ {exc.detail}")
 
     except Exception:
         import logging
 
-        logging.exception(
-            "Failed to link Telegram account"
-        )
+        logging.exception("Failed to link Telegram account")
 
         await update.message.reply_text(
             "❌ Не удалось выполнить привязку. "
             "Попробуйте получить новый код в настройках XO_OS."
         )
 
-async def process_ics_content(ics_content: bytes, source: str, file_path: str | None = None) -> str:
+
+async def process_ics_content(
+    ics_content: bytes, source: str, file_path: str | None = None
+) -> str:
     """
     Process ICS content by delegating to the working xo-os import CLI.
     Optionally delete the file if it was saved temporarily.
@@ -266,9 +263,11 @@ async def process_ics_content(ics_content: bytes, source: str, file_path: str | 
     try:
         # Save file temporarily if no path provided (ics_content is always bytes)
         if file_path is None:
-            temp_fd, temp_file_path = tempfile.mkstemp(suffix='.ics', dir=RECEIVED_ICS_DIR)
+            temp_fd, temp_file_path = tempfile.mkstemp(
+                suffix=".ics", dir=RECEIVED_ICS_DIR
+            )
             try:
-                with os.fdopen(temp_fd, 'wb') as f:
+                with os.fdopen(temp_fd, "wb") as f:
                     f.write(ics_content)
                 file_path = temp_file_path
             except Exception:
@@ -278,19 +277,23 @@ async def process_ics_content(ics_content: bytes, source: str, file_path: str | 
 
         # Run xo-os import command with calendar argument
         process = await asyncio.create_subprocess_exec(
-            "xo-os", "import", "--calendar", GOOGLE_CALENDAR_NAME, file_path,
+            "xo-os",
+            "import",
+            "--calendar",
+            GOOGLE_CALENDAR_NAME,
+            file_path,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
 
         stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
-            error_msg = stderr.decode('utf-8', errors='replace')
+            error_msg = stderr.decode("utf-8", errors="replace")
             logger.error(f"xo-os import failed: {error_msg}")
             raise RuntimeError(f"Import failed: {error_msg}")
 
-        result_msg = stdout.decode('utf-8', errors='replace').strip()
+        result_msg = stdout.decode("utf-8", errors="replace").strip()
         logger.info(f"xo-os import successful ({source}): {result_msg}")
 
         # Delete the temporary file if we saved it
@@ -319,16 +322,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 def main() -> None:
     """Start the bot."""
     # Create the Application
-    application = (
-        Application
-        .builder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .build()
-    )
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    application.add_handler(
-        CommandHandler("start", handle_start)
-    )
+    application.add_handler(CommandHandler("start", handle_start))
 
     application.add_handler(
         MessageHandler(
@@ -337,11 +333,7 @@ def main() -> None:
         )
     )
     # Add handlers
-    application.add_handler(
-        MessageHandler(
-            filters.Document.ALL,
-            handle_document)
-        )
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
     # Add error handler
     application.add_error_handler(error_handler)

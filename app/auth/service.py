@@ -3,6 +3,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from typing import Optional
 
 from fastapi import Cookie, Depends, HTTPException, status
 from passlib.context import CryptContext
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session as SQLAlchemySession
 
 from app.auth.schemas import UserCreate, UserLogin
 from app.config import settings
+from app.database.db import db
 from app.database.models import Session as AppSession
 from app.database.models import User, UserStats
 from app.email.service import EmailService

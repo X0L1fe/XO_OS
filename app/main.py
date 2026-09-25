@@ -41,6 +41,8 @@ from app.auth.service import (
     create_session,
     create_user,
     delete_session,
+    get_current_active_user,
+    get_current_user,
     get_password_hash,
     get_user_from_session,
     initiate_email_change,
@@ -65,10 +67,7 @@ from app.database.models import (
     XPTransaction,
 )
 from app.email.service import EmailService
-from app.focus.routes import (
-    publish_focus_updated,
-    publish_gamification_updated,
-)
+from app.event import publish_focus_updated, publish_gamification_updated
 
 # Import for focus session service
 from app.focus.service import FocusService

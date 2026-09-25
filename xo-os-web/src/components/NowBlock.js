@@ -23,7 +23,7 @@ const EMPTY_NOW = {
   timeEstimate: "",
   priority: "",
   xpReward: 0,
-  time": "--:--",
+  time: "--:--",
   category: "",
 };
 
@@ -241,7 +241,7 @@ export default function NowBlock() {
 
   // Resume the focus session
   const handleResumeFocus = async () => {
-    if !now.session_id) return;
+    if (!now.session_id) return;
     try {
       setLoading(true);
       const response = await fetch(
@@ -372,28 +372,23 @@ export default function NowBlock() {
   const [displayedElapsedSeconds, setDisplayedElapsedSeconds] = useState(0);
 
   useEffect(() => {
-    if (isFocusActive || isFocusPaused) {
-      // Initialize the displayed elapsed time from the now state
-      setDisplayedElapsedSeconds(now.elapsed_seconds || 0);
-
-      const interval = window.setInterval(() => {
-        setDisplayedElapsedSeconds((prev) => prev + 1);
-      }, 1000);
-
-      return () => {
-        window.clearInterval(interval);
-      };
-    } else {
+    if (!isFocusActive && !isFocusPaused) {
       setDisplayedElapsedSeconds(0);
+      return;
     }
-  }, [isFocusActive, isFocusPaused, now.elapsed_seconds]);
 
-  // When we get a new now state that is a focus session, we reset the displayed elapsed time to the now.elapsed_seconds
-  useEffect(() => {
-    if (now.type === 'focus' && (now.status === 'active' || now.status === 'paused')) {
-      setDisplayedElapsedSeconds(now.elapsed_seconds || 0);
+    setDisplayedElapsedSeconds(now.elapsed_seconds || 0);
+
+    if (!isFocusActive) {
+      return; // на паузе — просто синхронизируемся и стоим
     }
-  }, [now.type, now.status, now.elapsed_seconds]);
+
+    const interval = window.setInterval(() => {
+      setDisplayedElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [isFocusActive, isFocusPaused, now.elapsed_seconds]);
 
   const formattedDisplayedElapsed = formatElapsedTime(displayedElapsedSeconds);
 
@@ -513,22 +508,23 @@ export default function NowBlock() {
       {/* Completion Message Banner */}
       {completionMessage && (
         <div
-          className="
-            mt-4
-            px-4
-            py-2
-            rounded-lg
-            text-sm
-            font-medium
-            flex
-            items-center
-            justify-between
-            ${completionMessageType === 'success'
+          className={`
+              mt-4
+              px-4 
+              py-2 
+              rounded-lg 
+              text-sm 
+              font-medium 
+              flex 
+              items-center 
+              justify-between
+              ${completionMessageType === 'success'
               ? 'bg-accentGreen/10 border border-accentGreen/20 text-accentGreen'
               : completionMessageType === 'error'
                 ? 'bg-accentRed/10 border border-accentRed/20 text-accentRed'
-                : 'bg-accentYellow/10 border border-accentYellow/20 text-accentYellow'}
-          "
+                : 'bg-accentYellow/10 border border-accentYellow/20 text-accentYellow'
+            }
+`}
         >
           <div>{completionMessage}</div>
           {completionMessageType !== 'pending' && (
@@ -1088,7 +1084,7 @@ export default function NowBlock() {
 
                   <h2 className="mt-0.5 text-lg font-semibold tracking-tight text-primary">
                     ЗАВЕРШЕНИЕ
-                  </p>
+                  </h2>
                 </div>
               </div>
 
@@ -1236,7 +1232,7 @@ export default function NowBlock() {
               </div>
             </div>
           </div>
-        )
+        </div>
       )}
     </section>
   );

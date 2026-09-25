@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, status
 from fastapi.security import HTTPBearer
 
-from app.ai.verification import VerificationResult, get_ai_verification_service
 from app.auth.service import get_current_user
 from app.database import db
 from app.database.models import User
 from app.focus.service import FocusService
-from app.main import publish_focus_updated
+from app.ai.verification import AIVerificationService, get_ai_verification_service
+from app.event import publish_focus_updated, publish_gamification_updated
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/focus",
