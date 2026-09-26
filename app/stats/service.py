@@ -3,91 +3,22 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Tuple, Set
 
 from app.database.models import User, Lesson, ScheduleExclusion
+from app.common.schedule_filters import (
+    normalize_schedule_value,
+    normalize_schedule_category,
+    lesson_is_visible,
+    lesson_is_excluded_by_category,
+    lesson_is_excluded_by_subject,
+    get_schedule_exclusions,
+)
 
 
-def normalize_schedule_value(value: str | None) -> str:
-    """
-    Normalize a schedule value for comparison.
-
-    Example:
-        "  Программирование  " -> "ПРОГРАММИРОВАНИЕ"
-    """
-    if not value:
-        return ""
-
-    return " ".join(str(value).strip().split()).upper()
 
 
-def normalize_schedule_category(value: str | None) -> str:
-    """
-    Normalize lesson category.
-    Unknown categories are preserved as-is.
-    """
-    normalized = normalize_schedule_value(value)
-
-    if not normalized:
-        return "REGULAR"
-
-    category_aliases = {
-        "MILITARY": "MILITARY",
-        "ВОЕННАЯ": "MILITARY",
-        "ВОЕННАЯ ПОДГОТОВКА": "MILITARY",
-        "ELECTIVE": "ELECTIVE",
-        "ЭЛЕКТИВ": "ELECTIVE",
-        "ЭЛЕКТИВЫ": "ELECTIVE",
-        "REGULAR": "REGULAR",
-        "ОБЫЧНЫЕ": "REGULAR",
-        "ОБЫЧНЫЕ ЗАНЯТИЯ": "REGULAR",
-    }
-
-    return category_aliases.get(normalized, normalized)
 
 
-def get_schedule_exclusions(
-    session: Session,
-    user_id: int,
-) -> Tuple[Set[str], Set[str]]:
-    """
-    Return excluded categories and subjects for the current user.
-    """
-
-    exclusions = (
-        session.query(ScheduleExclusion)
-        .filter(ScheduleExclusion.user_id == user_id)
-        .all()
-    )
-
-    excluded_categories: Set[str] = set()
-    excluded_subjects: Set[str] = set()
-
-    for exclusion in exclusions:
-        if exclusion.exclusion_type == "category":
-            excluded_categories.add(normalize_schedule_category(exclusion.value_key))
-        elif exclusion.exclusion_type == "subject":
-            excluded_subjects.add(exclusion.value_key.lower().strip())
-
-    return excluded_categories, excluded_subjects
 
 
-def lesson_is_visible(
-    lesson: Lesson,
-    excluded_categories: Set[str],
-    excluded_subjects: Set[str],
-) -> bool:
-    """
-    Return True when lesson should be included in schedule/statistics.
-    """
-
-    category = normalize_schedule_category(lesson.category)
-    subject = normalize_schedule_value(lesson.subject)
-
-    if category in excluded_categories:
-        return False
-
-    if subject and subject in excluded_subjects:
-        return False
-
-    return True
 
 
 def get_semester_bounds(

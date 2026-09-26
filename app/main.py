@@ -195,56 +195,15 @@ def publish_focus_updated(user_id: int):
 
 
 
-# Helper functions for schedule exclusions (moved from service.py for circular import avoidance)
-def normalize_schedule_category(category: str) -> str:
-    """Normalize schedule category for comparison."""
-    if not category or category.strip() == "":
-        return "OTHER"
-    return category.strip().upper()
-
-
-def lesson_is_visible(
-    lesson: Lesson, excluded_categories: set, excluded_subjects: set
-) -> bool:
-    """Check if a lesson should be visible based on user's exclusions."""
-    if lesson_is_excluded_by_category(lesson, excluded_categories):
-        return False
-    if lesson_is_excluded_by_subject(lesson, excluded_subjects):
-        return False
-    return True
-
-
-def lesson_is_excluded_by_category(lesson: Lesson, excluded_categories: set) -> bool:
-    """Check if lesson is excluded by category."""
-    lesson_category = normalize_schedule_category(lesson.category or "")
-    return lesson_category in excluded_categories
-
-
-def lesson_is_excluded_by_subject(lesson: Lesson, excluded_subjects: set) -> bool:
-    """Check if lesson is excluded by subject."""
-    lesson_subject = (lesson.subject or "").strip().lower()
-    return lesson_subject in excluded_subjects
-
-
-def get_schedule_exclusions(db: Session, user_id: int) -> tuple[set, set]:
-    """
-    Get the user's schedule exclusions as sets of normalized category and subject values.
-    Returns (excluded_categories, excluded_subjects).
-    """
-    exclusions = (
-        db.query(ScheduleExclusion).filter(ScheduleExclusion.user_id == user_id).all()
-    )
-
-    excluded_categories = set()
-    excluded_subjects = set()
-
-    for exclusion in exclusions:
-        if exclusion.exclusion_type == "category":
-            excluded_categories.add(normalize_schedule_category(exclusion.value_key))
-        elif exclusion.exclusion_type == "subject":
-            excluded_subjects.add(exclusion.value_key.lower().strip())
-
-    return excluded_categories, excluded_subjects
+# Import shared schedule filter helpers
+from app.common.schedule_filters import (
+    normalize_schedule_value,
+    normalize_schedule_category,
+    lesson_is_visible,
+    lesson_is_excluded_by_category,
+    lesson_is_excluded_by_subject,
+    get_schedule_exclusions,
+)
 
 
 
@@ -290,52 +249,6 @@ class ScheduleFiltersRequest(BaseModel):
     excluded_subjects: list[str] = []
 
 
-def normalize_schedule_value(value: str | None) -> str:
-    """
-    Нормализует значение для хранения и сравнения.
-
-    Пример:
-        " История " -> "ИСТОРИЯ"
-        "Военная подготовка" -> "ВОЕННАЯ ПОДГОТОВКА"
-    """
-    if not value:
-        return ""
-
-    return " ".join(value.strip().split()).upper()
-
-
-def normalize_schedule_category(value: str | None) -> str:
-    """
-    Нормализует категорию занятия.
-    Пустая/неизвестная категория считается REGULAR.
-    """
-    normalized = normalize_schedule_value(value)
-
-    if not normalized:
-        return "REGULAR"
-
-    if normalized in {
-        "MILITARY",
-        "ВОЕННАЯ",
-        "ВОЕННАЯ ПОДГОТОВКА",
-    }:
-        return "MILITARY"
-
-    if normalized in {
-        "ELECTIVE",
-        "ЭЛЕКТИВ",
-        "ЭЛЕКТИВЫ",
-    }:
-        return "ELECTIVE"
-
-    if normalized in {
-        "REGULAR",
-        "ОБЫЧНЫЕ",
-        "ОБЫЧНЫЕ ЗАНЯТИЯ",
-    }:
-        return "REGULAR"
-
-    return normalized
 
 
 def get_obsidian_vault_path() -> Optional[str]:

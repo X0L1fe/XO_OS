@@ -18,35 +18,14 @@ from app.database.models import (
 # Import event publishing functions
 from app.event import publish_focus_updated, publish_gamification_updated
 
-
-def normalize_schedule_category(category: str) -> str:
-    """Normalize schedule category for comparison."""
-    if not category or category.strip() == "":
-        return "OTHER"
-    return category.strip().upper()
-
-
-def lesson_is_visible(
-    lesson: Lesson, excluded_categories: set, excluded_subjects: set
-) -> bool:
-    """Check if a lesson should be visible based on user's exclusions."""
-    if lesson_is_excluded_by_category(lesson, excluded_categories):
-        return False
-    if lesson_is_excluded_by_subject(lesson, excluded_subjects):
-        return False
-    return True
-
-
-def lesson_is_excluded_by_category(lesson: Lesson, excluded_categories: set) -> bool:
-    """Check if lesson is excluded by category."""
-    lesson_category = normalize_schedule_category(lesson.category or "")
-    return lesson_category in excluded_categories
-
-
-def lesson_is_excluded_by_subject(lesson: Lesson, excluded_subjects: set) -> bool:
-    """Check if lesson is excluded by subject."""
-    lesson_subject = (lesson.subject or "").strip().lower()
-    return lesson_subject in excluded_subjects
+# Import shared schedule filter helpers
+from app.common.schedule_filters import (
+    normalize_schedule_category,
+    lesson_is_visible,
+    lesson_is_excluded_by_category,
+    lesson_is_excluded_by_subject,
+    get_schedule_exclusions,
+)
 
 
 class FocusService:
@@ -377,24 +356,7 @@ class FocusService:
         Get the user's schedule exclusions as sets of normalized category and subject values.
         Returns (excluded_categories, excluded_subjects).
         """
-        exclusions = (
-            self.db.query(ScheduleExclusion)
-            .filter(ScheduleExclusion.user_id == user_id)
-            .all()
-        )
-
-        excluded_categories = set()
-        excluded_subjects = set()
-
-        for exclusion in exclusions:
-            if exclusion.exclusion_type == "category":
-                excluded_categories.add(
-                    normalize_schedule_category(exclusion.value_key)
-                )
-            elif exclusion.exclusion_type == "subject":
-                excluded_subjects.add(exclusion.value_key.lower().strip())
-
-        return excluded_categories, excluded_subjects
+        return get_schedule_exclusions(self.db, user_id)
 
     def add_evidence(
         self, session_id: int, user_id: int, evidence: dict
