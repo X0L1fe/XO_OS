@@ -89,6 +89,8 @@ from app.telegram.service import (
     unlink_telegram_account,
 )
 from app.stats import router as stats_router
+from app.gamification import router as gamification_router
+from app.focus import router as focus_router
 
 # Try to import Google Calendar service; if not available, set to None.
 try:
@@ -132,6 +134,8 @@ OBSIDIAN_CONFIG_PATH = Path("data/obsidian_config.json")
 active_connections: dict[int, list[asyncio.Queue]] = {}
 
 app.include_router(stats_router, prefix="/api/stats")
+app.include_router(gamification_router, prefix="/api/gamification")
+app.include_router(focus_router, prefix="/api/focus")
 
 
 async def event_publisher(user_id: int) -> AsyncGenerator[str, None]:
@@ -189,24 +193,6 @@ def publish_focus_updated(user_id: int):
                 pass
 
 
-def publish_gamification_updated(user_id: int):
-    """
-    Publish a gamification updated event to all connections for a user.
-    """
-    if user_id in active_connections:
-        event = {
-            "type": "xo-os:gamification-updated",
-            "user_id": user_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        # Put the event in all queues for this user
-        for queue in active_connections[user_id]:
-            # Use put_nowait to avoid blocking, and handle queue full errors
-            try:
-                queue.put_nowait(event)
-            except asyncio.QueueFull:
-                # If queue is full, we just skip this event
-                pass
 
 
 # Helper functions for schedule exclusions (moved from service.py for circular import avoidance)
@@ -261,84 +247,6 @@ def get_schedule_exclusions(db: Session, user_id: int) -> tuple[set, set]:
     return excluded_categories, excluded_subjects
 
 
-# ============================================================
-# GAMIFICATION API
-# ============================================================
-
-
-@app.get("/api/gamification")
-def get_gamification(
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    Получите статистику геймификации текущего пользователя (уровень, опыт, серия).
-    Это единственный источник истины для отображения геймификации интерфейса.
-    """
-    with db.session() as session:
-        stats = (
-            session.query(UserStats)
-            .filter(UserStats.user_id == current_user.id)
-            .first()
-        )
-        if not stats:
-            # Возвращаем значения по умолчанию, если статистика не существует
-            return {
-                "level": 1,
-                "total_xp": 0,
-                "xp_current_level": 0,
-                "xp_for_next_level": 1000,
-                "xp_remaining": 1000,
-                "progress_percent": 0,
-                "current_streak": 0,
-                "max_streak": 0,
-            }
-
-        total_xp = stats.total_xp
-        level = stats.level
-        current_streak = stats.current_streak
-        max_streak = stats.max_streak
-
-        # Рассчитать XP для текущего уровня и прогресса
-        xp_for_current_level = (level - 1) * 1000
-        xp_current_level = total_xp - xp_for_current_level
-        xp_for_next_level = 1000
-        xp_remaining = xp_for_next_level - xp_current_level
-        progress_percent = (xp_current_level / xp_for_next_level) * 100
-
-        return {
-            "level": level,
-            "total_xp": total_xp,
-            "xp_current_level": xp_current_level,
-            "xp_for_next_level": xp_for_next_level,
-            "xp_remaining": xp_remaining,
-            "progress_percent": round(progress_percent, 2),
-            "current_streak": current_streak,
-            "max_streak": max_streak,
-        }
-
-
-@app.put("/api/settings/gamification")
-def update_gamification_settings(
-    settings: dict,
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    Обновите настройки геймификации для текущего пользователя.
-    Сюда входят флаг включения проверки ИИ и значения XP.
-    """
-    with db.session() as session:
-        user = session.query(User).filter(User.id == current_user.id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        # Update AI verification enabled setting
-        if "ai_verification_enabled" in settings:
-            user.ai_verification_enabled = (
-                1 if settings["ai_verification_enabled"] else 0
-            )
-
-        session.commit()
-        return {"message": "Settings updated successfully"}
 
 
 # ============================================================
@@ -346,51 +254,6 @@ def update_gamification_settings(
 # ============================================================
 
 
-@app.post("/api/dev/reset-gamification")
-def reset_gamification(
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    Development-only endpoint to reset gamification data for the current user.
-    This should not be available in production.
-    """
-    # In a real application, you would check if the environment is development
-    # For now, we'll allow it but log a warning
-    logger.warning(
-        f"Gamification reset requested by user {current_user.id} in environment"
-    )
-
-    with db.session() as session:
-        # Reset UserStats
-        stats = (
-            session.query(UserStats)
-            .filter(UserStats.user_id == current_user.id)
-            .first()
-        )
-        if stats:
-            stats.total_xp = 0
-            stats.current_streak = 0
-            stats.max_streak = 0
-            stats.level = 1
-            stats.last_activity_date = None
-
-        # Delete all focus sessions and related data for this user
-        # First delete evidence
-        session.query(FocusEvidence).join(FocusSession).filter(
-            FocusSession.user_id == current_user.id
-        ).delete()
-        # Then delete XP transactions
-        session.query(XPTransaction).filter(
-            XPTransaction.user_id == current_user.id
-        ).delete()
-        # Then delete focus sessions
-        session.query(FocusSession).filter(
-            FocusSession.user_id == current_user.id
-        ).delete()
-
-        session.commit()
-
-    return {"message": "Gamification data reset successfully"}
 
 
 @app.post("/api/webhook/telegram")
