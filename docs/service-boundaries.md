@@ -1,0 +1,14 @@
+# Границы сервисов и их взаимодействие
+
+| Сервис      | Ответственность                                   | Использует БД (таблицы)                 | Публикует события            | Потребляет события | Вызывает другие сервисы                     |
+|-------------|---------------------------------------------------|------------------------------------------|------------------------------|--------------------|----------------------------------------------|
+| auth        | регистрация, аутентификация, восстановление пароля | User, UserStats, Session                 | –                            | –                  | email (отправка писем)                       |
+| schedule    | получение расписания, применение исключений       | Lesson, ScheduleExclusion                | –                            | –                  | –                                            |
+| focus       | управление фокус‑сессиями, начисление базового XP | FocusSession, FocusEvidence, Lesson, UserStats, XPTransaction | publish_focus_updated, publish_gamification_updated | – | – (выдает XP через собственный метод)       |
+| gamification| учёт уровня, XP, серий                            | UserStats, XPTransaction                 | publish_gamification_updated | focus (через событие) | –                                            |
+| stats       | расчёт семестровой/недельной статистики, топ‑предметов | Lesson, UserStats                        | –                            | –                  | –                                            |
+| sync        | импорт расписания (MAIS, ICS), синхр. с Google Calendar, экспорт в Obsidian | Lesson, User, UserStats                  | –                            | –                  | google_calendar (внутри сервиса)             |
+| email       | отправка электронных писов                        | –                                        | –                            | auth (по требованию) | –                                            |
+| telegram    | обработка Telegram web‑huks, генерация кодов      | User (telegram_id)                       | –                            | –                  | –                                            |
+| events      | управление SSE‑подключениями, рассылка обновлений | –                                        | –                            | focus, gamification, sync (через publish_*) | –                                            |
+| main        | только композиция: роутеры, middleware, startup/shutdown | –                                        | –                            | –                  | все роутеры (через include_router)           |
