@@ -6,6 +6,14 @@ from sqlalchemy.orm import Session
 from app.database.models import Lesson, ScheduleExclusion
 
 
+# Shared constants for schedule categories
+SCHEDULE_CATEGORY_LABELS = {
+    "REGULAR": "Обычные занятия",
+    "ELECTIVE": "Элективы",
+    "MILITARY": "Военная подготовка",
+}
+
+
 def normalize_schedule_value(value: str | None) -> str:
     """
     Normalize a schedule value for comparison.

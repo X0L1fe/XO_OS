@@ -68,9 +68,11 @@ from app.database.models import (
 )
 from app.email.service import EmailService
 from app.event import publish_focus_updated, publish_gamification_updated
+from app.focus import router as focus_router
 
 # Import for focus session service
 from app.focus.service import FocusService
+from app.gamification import router as gamification_router
 from app.mais_parser import (
     async_fetch_group_schedule,
     async_fetch_groups,
@@ -78,6 +80,8 @@ from app.mais_parser import (
     fetch_groups,
     parse_mais_schedule,
 )
+from app.schedule import router as schedule_router
+from app.stats import router as stats_router
 from app.sync.service import SyncService
 from app.telegram.schemas import (
     TelegramLinkResponse,
@@ -88,9 +92,6 @@ from app.telegram.service import (
     create_telegram_link_code,
     unlink_telegram_account,
 )
-from app.stats import router as stats_router
-from app.gamification import router as gamification_router
-from app.focus import router as focus_router
 
 # Try to import Google Calendar service; if not available, set to None.
 try:
@@ -136,6 +137,7 @@ active_connections: dict[int, list[asyncio.Queue]] = {}
 app.include_router(stats_router, prefix="/api/stats")
 app.include_router(gamification_router, prefix="/api/gamification")
 app.include_router(focus_router, prefix="/api/focus")
+app.include_router(schedule_router, prefix="/api/schedule")
 
 
 async def event_publisher(user_id: int) -> AsyncGenerator[str, None]:
@@ -193,26 +195,19 @@ def publish_focus_updated(user_id: int):
                 pass
 
 
-
-
 # Import shared schedule filter helpers
 from app.common.schedule_filters import (
-    normalize_schedule_value,
-    normalize_schedule_category,
-    lesson_is_visible,
+    get_schedule_exclusions,
     lesson_is_excluded_by_category,
     lesson_is_excluded_by_subject,
-    get_schedule_exclusions,
+    lesson_is_visible,
+    normalize_schedule_category,
+    normalize_schedule_value,
 )
-
-
-
 
 # ============================================================
 # DEVELOPMENT ONLY: RESET GAMIFICATION
 # ============================================================
-
-
 
 
 @app.post("/api/webhook/telegram")
@@ -231,24 +226,6 @@ async def telegram_webhook(
     except Exception as e:
         logger.error(f"Error processing Telegram webhook: {e}")
         return {"status": "error"}
-
-
-# ============================================================
-# SCHEDULE FILTERS
-# ============================================================
-
-SCHEDULE_CATEGORY_LABELS = {
-    "REGULAR": "Обычные занятия",
-    "ELECTIVE": "Элективы",
-    "MILITARY": "Военная подготовка",
-}
-
-
-class ScheduleFiltersRequest(BaseModel):
-    excluded_categories: list[str] = []
-    excluded_subjects: list[str] = []
-
-
 
 
 def get_obsidian_vault_path() -> Optional[str]:
@@ -867,286 +844,8 @@ def get_now(
 
 
 # ============================================================
-# SCHEDULE FILTERS API
-# ============================================================
-
-
-@app.get("/api/schedule/filters")
-def get_schedule_filters(
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    Возвращает:
-    - доступные категории;
-    - доступные предметы;
-    - текущие исключения пользователя.
-    """
-
-    with db.session() as session:
-        lessons = (
-            session.query(Lesson)
-            .filter(Lesson.user_id == current_user.id)
-            .order_by(Lesson.subject.asc())
-            .all()
-        )
-
-        exclusions = (
-            session.query(ScheduleExclusion)
-            .filter(ScheduleExclusion.user_id == current_user.id)
-            .all()
-        )
-
-        excluded_categories = set()
-        excluded_subjects = set()
-
-        for exclusion in exclusions:
-            if exclusion.exclusion_type == "category":
-                excluded_categories.add(exclusion.value_key)
-
-            elif exclusion.exclusion_type == "subject":
-                excluded_subjects.add(exclusion.value_key)
-
-        # Собираем уникальные категории из реального расписания.
-        available_categories = set()
-
-        for lesson in lessons:
-            available_categories.add(normalize_schedule_category(lesson.category))
-
-        # Всегда показываем основные категории,
-        # даже если конкретной категории сейчас нет.
-        for category in SCHEDULE_CATEGORY_LABELS:
-            available_categories.add(category)
-
-        categories = []
-
-        for category in [
-            "REGULAR",
-            "ELECTIVE",
-            "MILITARY",
-        ]:
-            if category in available_categories:
-                categories.append(
-                    {
-                        "key": category,
-                        "label": SCHEDULE_CATEGORY_LABELS[category],
-                        "excluded": category in excluded_categories,
-                    }
-                )
-
-        # Уникальные предметы.
-        subjects_by_key = {}
-
-        for lesson in lessons:
-            if not lesson.subject:
-                continue
-
-            label = " ".join(lesson.subject.strip().split())
-
-            key = normalize_schedule_value(label)
-
-            if not key:
-                continue
-
-            if key not in subjects_by_key:
-                subjects_by_key[key] = label
-
-        subjects = [
-            {
-                "key": key,
-                "label": label,
-                "excluded": key in excluded_subjects,
-            }
-            for key, label in sorted(
-                subjects_by_key.items(),
-                key=lambda item: item[1].lower(),
-            )
-        ]
-
-        return {
-            "excluded_categories": sorted(excluded_categories),
-            "excluded_subjects": sorted(excluded_subjects),
-            "categories": categories,
-            "subjects": subjects,
-        }
-
-
-@app.put("/api/schedule/filters")
-def update_schedule_filters(
-    filters: ScheduleFiltersRequest,
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    Полностью заменяет набор исключений текущего пользователя.
-
-    Пример:
-
-    {
-        "excluded_categories": ["MILITARY"],
-        "excluded_subjects": [
-            "ИСТОРИЯ",
-            "ФИЛОСОФИЯ"
-        ]
-    }
-    """
-
-    allowed_categories = {
-        "REGULAR",
-        "ELECTIVE",
-        "MILITARY",
-    }
-
-    categories = {
-        normalize_schedule_category(value)
-        for value in filters.excluded_categories
-        if value
-    }
-
-    categories &= allowed_categories
-
-    subjects = {
-        normalize_schedule_value(value) for value in filters.excluded_subjects if value
-    }
-
-    with db.session() as session:
-        existing_exclusions = (
-            session.query(ScheduleExclusion)
-            .filter(ScheduleExclusion.user_id == current_user.id)
-            .all()
-        )
-
-        for exclusion in existing_exclusions:
-            session.delete(exclusion)
-
-        # Категории.
-        for category in sorted(categories):
-            session.add(
-                ScheduleExclusion(
-                    user_id=current_user.id,
-                    exclusion_type="category",
-                    value_key=category,
-                    value_label=SCHEDULE_CATEGORY_LABELS.get(
-                        category,
-                        category,
-                    ),
-                )
-            )
-
-        # Предметы.
-        subject_labels = {}
-
-        lessons = session.query(Lesson).filter(Lesson.user_id == current_user.id).all()
-
-        for lesson in lessons:
-            if not lesson.subject:
-                continue
-
-            normalized = normalize_schedule_value(lesson.subject)
-
-            if normalized and normalized not in subject_labels:
-                subject_labels[normalized] = lesson.subject.strip()
-
-        for subject_key in sorted(subjects):
-            session.add(
-                ScheduleExclusion(
-                    user_id=current_user.id,
-                    exclusion_type="subject",
-                    value_key=subject_key,
-                    value_label=subject_labels.get(
-                        subject_key,
-                        subject_key,
-                    ),
-                )
-            )
-
-        session.commit()
-
-        return {
-            "success": True,
-            "excluded_categories": sorted(categories),
-            "excluded_subjects": sorted(subjects),
-        }
-
-
-@app.get("/api/schedule")
-def get_schedule(
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    Возвращает ближайшие занятия текущего пользователя
-    с учётом персональных исключений расписания.
-    """
-
-    now = datetime.now(timezone.utc)
-
-    with db.session() as session:
-        exclusions = (
-            session.query(ScheduleExclusion)
-            .filter(ScheduleExclusion.user_id == current_user.id)
-            .all()
-        )
-
-        excluded_categories = {
-            exclusion.value_key
-            for exclusion in exclusions
-            if exclusion.exclusion_type == "category"
-        }
-
-        excluded_subjects = {
-            exclusion.value_key
-            for exclusion in exclusions
-            if exclusion.exclusion_type == "subject"
-        }
-
-        lessons = (
-            session.query(Lesson)
-            .filter(
-                Lesson.user_id == current_user.id,
-                Lesson.start_time >= now,
-            )
-            .order_by(Lesson.start_time)
-            .limit(200)
-            .all()
-        )
-
-        result = []
-
-        for lesson in lessons:
-            category = normalize_schedule_category(lesson.category)
-
-            subject_key = normalize_schedule_value(lesson.subject)
-
-            # Исключение по категории.
-            if category in excluded_categories:
-                continue
-
-            # Исключение по предмету.
-            if subject_key in excluded_subjects:
-                continue
-
-            result.append(
-                {
-                    "id": lesson.id,
-                    "stable_id": lesson.stable_id,
-                    "time": lesson.start_time.strftime("%H:%M"),
-                    "subject": lesson.subject,
-                    "type": lesson.lesson_type,
-                    "category": category,
-                    "room": lesson.room or "",
-                    "teacher": lesson.teacher or "",
-                    "status": ("sync" if lesson.google_event_id else "unsynced"),
-                }
-            )
-
-        return result
-
-
-# ============================================================
 # STATISTICS
 # ============================================================
-
-
-
-
 
 
 @app.get("/api/achievements")
