@@ -1,0 +1,1 @@
+- [Extract stats router from main.py to app/stats/routes.py](stats-router-extract.md) — Separated stats endpoints and helper functions into modular structure, updated main.py to use the new router, removed duplicates.
