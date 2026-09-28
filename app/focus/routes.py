@@ -5,10 +5,9 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, status
-from fastapi.security import HTTPBearer
 
-from app.auth.service import get_current_user
-from app.database import db
+from app.auth.service import get_current_user, get_current_active_user
+from app.database.db import db
 from app.database.models import User
 from app.focus.service import FocusService
 from app.ai.verification import AIVerificationService, get_ai_verification_service
@@ -17,16 +16,14 @@ from app.event import publish_focus_updated, publish_gamification_updated
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/api/focus",
     tags=["focus"],
-    dependencies=[Depends(HTTPBearer())],
 )
 
 
 @router.post("/start", status_code=status.HTTP_201_CREATED)
 async def start_focus_session(
     goal_text: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Start a new focus session for the current user.
@@ -59,7 +56,7 @@ async def start_focus_session(
 @router.post("/{session_id}/pause", status_code=status.HTTP_200_OK)
 async def pause_focus_session(
     session_id: int = Path(..., gt=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Pause an active focus session.
@@ -83,7 +80,7 @@ async def pause_focus_session(
 @router.post("/{session_id}/resume", status_code=status.HTTP_200_OK)
 async def resume_focus_session(
     session_id: int = Path(..., gt=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Resume a paused focus session.
@@ -110,7 +107,7 @@ async def complete_focus_session(
     completion_mode: str = "manual",
     evidence: Optional[List[dict]] = None,
     background_tasks: BackgroundTasks = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Complete a focus session.
@@ -210,7 +207,19 @@ def _calculate_elapsed_seconds(session) -> int:
     else:
         end_time = session.ended_at
 
-    total_duration = (end_time - session.started_at).total_seconds()
+    # Ensure both datetimes are offset-aware in UTC
+    started_at = session.started_at
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    else:
+        started_at = started_at.astimezone(timezone.utc)
+
+    if end_time.tzinfo is None:
+        end_time = end_time.replace(tzinfo=timezone.utc)
+    else:
+        end_time = end_time.astimezone(timezone.utc)
+
+    total_duration = (end_time - started_at).total_seconds()
     productive_duration = total_duration - session.total_paused_seconds
     return int(productive_duration)
 
@@ -289,7 +298,7 @@ async def _process_ai_verification(
 
 @router.get("/active", status_code=status.HTTP_200_OK)
 async def get_active_focus_session(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Get the active focus session for the current user, if any.
@@ -313,7 +322,7 @@ async def get_active_focus_session(
 @router.get("/{session_id}", status_code=status.HTTP_200_OK)
 async def get_focus_session(
     session_id: int = Path(..., gt=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Get a focus session by ID.

@@ -1541,9 +1541,17 @@ async def periodic_mais_check():
                     user_db = session.query(User).filter(User.id == user.id).one()
                     # Check if we need to run the check
                     now = datetime.now(timezone.utc)
+                    last_mais_check = user_db.last_mais_check
+                    if last_mais_check is not None:
+                        # Ensure last_mais_check is offset-aware in UTC for subtraction
+                        if last_mais_check.tzinfo is None:
+                            last_mais_check = last_mais_check.replace(tzinfo=timezone.utc)
+                        else:
+                            last_mais_check = last_mais_check.astimezone(timezone.utc)
+
                     if (
                         user_db.last_mais_check is None
-                        or (now - user_db.last_mais_check).total_seconds() >= interval
+                        or (now - last_mais_check).total_seconds() >= interval
                     ):
                         # Perform the check
                         await check_mais_schedule_for_user(user_db, session)

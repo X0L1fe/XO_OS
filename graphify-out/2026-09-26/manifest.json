@@ -40,8 +40,8 @@
     "semantic_hash": "0a04eeea80f4d18227a0bdcbc245612e"
   },
   "app/main.py": {
-    "mtime": 1790250416.7337346,
-    "ast_hash": "374968e297d84f006412ebcfa1539aee",
+    "mtime": 1790412670.4672005,
+    "ast_hash": "ed7ec3fdac105e641b15fe509ae3b719",
     "semantic_hash": ""
   },
   "app/sync/__init__.py": {
@@ -422,6 +422,31 @@
   "app/web/static/js/main.90559390.js.LICENSE.txt": {
     "mtime": 1790251157.2415714,
     "ast_hash": "cccfa45cda3f72c4ebb3fb2f4ba53a71",
+    "semantic_hash": ""
+  },
+  "app/stats/routes.py": {
+    "mtime": 1790410349.4437394,
+    "ast_hash": "ff11d49a758c12761c79eb87026f6f5c",
+    "semantic_hash": ""
+  },
+  "app/stats/service.py": {
+    "mtime": 1790410531.189211,
+    "ast_hash": "43feacfd3457e62f7f066affb452d939",
+    "semantic_hash": ""
+  },
+  "docs/architecture-current.md": {
+    "mtime": 1790366450.5443923,
+    "ast_hash": "233153a99f899b0a2273c864f4600504",
+    "semantic_hash": ""
+  },
+  "docs/architecture-target.md": {
+    "mtime": 1790366671.755095,
+    "ast_hash": "0e8e2283b801e2d993d18c9d2edf8d87",
+    "semantic_hash": ""
+  },
+  "docs/service-boundaries.md": {
+    "mtime": 1790366724.6750674,
+    "ast_hash": "0343a56dbae948aebac8352675eff707",
     "semantic_hash": ""
   }
 }

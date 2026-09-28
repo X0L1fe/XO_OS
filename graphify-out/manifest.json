@@ -40,8 +40,8 @@
     "semantic_hash": "0a04eeea80f4d18227a0bdcbc245612e"
   },
   "app/main.py": {
-    "mtime": 1790412670.4672005,
-    "ast_hash": "ed7ec3fdac105e641b15fe509ae3b719",
+    "mtime": 1790593109.8074384,
+    "ast_hash": "2251e71c88ec0d5bb3ebe1da990ef413",
     "semantic_hash": ""
   },
   "app/sync/__init__.py": {
@@ -395,13 +395,13 @@
     "semantic_hash": ""
   },
   "app/focus/routes.py": {
-    "mtime": 1790248409.6718934,
-    "ast_hash": "c4b39efbc1618e851d82ae8202a6de4a",
+    "mtime": 1790592138.7835324,
+    "ast_hash": "a8fe1420e3bc38576fcb438daad7128b",
     "semantic_hash": ""
   },
   "app/focus/service.py": {
-    "mtime": 1790248476.4922948,
-    "ast_hash": "981b36bfb5f45ddc0a8dfd6233aae015",
+    "mtime": 1790595818.8844254,
+    "ast_hash": "99e4e6e67e4f4e9408b7f9cde1867313",
     "semantic_hash": ""
   },
   "app/sync/RESERV.py": {
@@ -425,13 +425,13 @@
     "semantic_hash": ""
   },
   "app/stats/routes.py": {
-    "mtime": 1790410349.4437394,
-    "ast_hash": "ff11d49a758c12761c79eb87026f6f5c",
+    "mtime": 1790417181.123054,
+    "ast_hash": "b6c2e1d161ca9c842458490f81b93004",
     "semantic_hash": ""
   },
   "app/stats/service.py": {
-    "mtime": 1790410531.189211,
-    "ast_hash": "43feacfd3457e62f7f066affb452d939",
+    "mtime": 1790436063.6028907,
+    "ast_hash": "1073cf3f4e39be27811889b68b8b4a3b",
     "semantic_hash": ""
   },
   "docs/architecture-current.md": {
@@ -447,6 +447,91 @@
   "docs/service-boundaries.md": {
     "mtime": 1790366724.6750674,
     "ast_hash": "0343a56dbae948aebac8352675eff707",
+    "semantic_hash": ""
+  },
+  "app/common/schedule_filters.py": {
+    "mtime": 1790438444.7384083,
+    "ast_hash": "18bf44e81ad8438b7e1bbfa1c9769547",
+    "semantic_hash": ""
+  },
+  "app/focus/__init__.py": {
+    "mtime": 1790428032.2096753,
+    "ast_hash": "2fc3704acb1eaafa94f7f9cd7a5b7cfc",
+    "semantic_hash": ""
+  },
+  "app/gamification/__init__.py": {
+    "mtime": 1790421128.1178527,
+    "ast_hash": "2fc3704acb1eaafa94f7f9cd7a5b7cfc",
+    "semantic_hash": ""
+  },
+  "app/gamification/routes.py": {
+    "mtime": 1790421102.2151515,
+    "ast_hash": "803b0025a0b98f02b269294e83ddca88",
+    "semantic_hash": ""
+  },
+  "app/gamification/service.py": {
+    "mtime": 1790420637.490955,
+    "ast_hash": "e59d29a7b5da263762303a3c7d6d88f5",
+    "semantic_hash": ""
+  },
+  "app/schedule/__init__.py": {
+    "mtime": 1790438230.7295475,
+    "ast_hash": "2fc3704acb1eaafa94f7f9cd7a5b7cfc",
+    "semantic_hash": ""
+  },
+  "app/schedule/routes.py": {
+    "mtime": 1790449679.1726103,
+    "ast_hash": "f7969e8a640309a59f46b7365430217a",
+    "semantic_hash": ""
+  },
+  "app/schedule/service.py": {
+    "mtime": 1790447851.220007,
+    "ast_hash": "c7c94c945088d6b879af8d142e465e8e",
+    "semantic_hash": ""
+  },
+  "app/stats/__init__.py": {
+    "mtime": 1790413197.9850354,
+    "ast_hash": "2fc3704acb1eaafa94f7f9cd7a5b7cfc",
+    "semantic_hash": ""
+  },
+  "MEMORY.md": {
+    "mtime": 1790428106.6812668,
+    "ast_hash": "5db243370f55f8d3183b771d65204c91",
+    "semantic_hash": ""
+  },
+  "memory/focus-extraction-complete.md": {
+    "mtime": 1790428068.6530716,
+    "ast_hash": "162971b57717becbe39248a1d290b86e",
+    "semantic_hash": ""
+  },
+  "memory/gamification-extraction-complete.md": {
+    "mtime": 1790426997.9932735,
+    "ast_hash": "82e4c867830bbdd2104264a142bc8e67",
+    "semantic_hash": ""
+  },
+  "stats-router-extract.md": {
+    "mtime": 1790414215.9829657,
+    "ast_hash": "55bcbb80d0e566ba5f33779d82b0339f",
+    "semantic_hash": ""
+  },
+  "get_token.py": {
+    "mtime": 1790450410.1909754,
+    "ast_hash": "aa0382fe9f503177f944f42822364e12",
+    "semantic_hash": ""
+  },
+  "cookies.txt": {
+    "mtime": 1790452263.0088072,
+    "ast_hash": "410952950a15caba25d19fa702b80f15",
+    "semantic_hash": ""
+  },
+  "curl_output.txt": {
+    "mtime": 1790591299.287659,
+    "ast_hash": "9d023bfa14bc8ef5ddc4a21c37730676",
+    "semantic_hash": ""
+  },
+  "error.txt": {
+    "mtime": 1790453618.0982943,
+    "ast_hash": "e3ec2189f41474cd95804209eec14531",
     "semantic_hash": ""
   }
 }

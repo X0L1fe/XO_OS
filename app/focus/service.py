@@ -121,7 +121,12 @@ class FocusService:
 
         # Calculate the paused duration and add to total_paused_seconds
         now = datetime.now(timezone.utc)
-        paused_duration = (now - session.paused_at).total_seconds()
+        # Ensure session.paused_at is offset-aware in UTC
+        if session.paused_at.tzinfo is None:
+            paused_at = session.paused_at.replace(tzinfo=timezone.utc)
+        else:
+            paused_at = session.paused_at.astimezone(timezone.utc)
+        paused_duration = (now - paused_at).total_seconds()
         session.total_paused_seconds += int(paused_duration)
         session.paused_at = None
         session.status = "active"
@@ -181,8 +186,14 @@ class FocusService:
         now = datetime.now(timezone.utc)
         session.ended_at = now
 
+        # Ensure session.started_at is offset-aware in UTC
+        if session.started_at.tzinfo is None:
+            started_at = session.started_at.replace(tzinfo=timezone.utc)
+        else:
+            started_at = session.started_at.astimezone(timezone.utc)
+
         # Calculate total duration and productive duration (excluding pauses)
-        total_duration = (session.ended_at - session.started_at).total_seconds()
+        total_duration = (session.ended_at - started_at).total_seconds()
         productive_duration = total_duration - session.total_paused_seconds
         session.duration_seconds = int(total_duration)
 
