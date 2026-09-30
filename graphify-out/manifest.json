@@ -55,8 +55,8 @@
     "semantic_hash": "61796eed00a338502b4f67f607ca2840"
   },
   "app/sync/service.py": {
-    "mtime": 1790250172.5987294,
-    "ast_hash": "b355ab4397c98b3e55b6a398bd3dad78",
+    "mtime": 1790704435.5374086,
+    "ast_hash": "246e39640cc49743dd8a679724498edf",
     "semantic_hash": ""
   },
   "pyproject.toml": {
@@ -80,9 +80,9 @@
     "semantic_hash": "4da35a69132ab32e208dca87913e1f39"
   },
   "tests/test_sync.py": {
-    "mtime": 1788602305.2936883,
-    "ast_hash": "ba43469e4d97316c42347bedbac4b67c",
-    "semantic_hash": "ba43469e4d97316c42347bedbac4b67c"
+    "mtime": 1790704400.980519,
+    "ast_hash": "9d3b0cf5a3618de53da10bb4715cd024",
+    "semantic_hash": ""
   },
   "README.md": {
     "mtime": 1788606243.4103222,
@@ -395,13 +395,13 @@
     "semantic_hash": ""
   },
   "app/focus/routes.py": {
-    "mtime": 1790592138.7835324,
-    "ast_hash": "a8fe1420e3bc38576fcb438daad7128b",
+    "mtime": 1790708516.4447503,
+    "ast_hash": "e3ae1aea37a7e1028bd20bc59b892a30",
     "semantic_hash": ""
   },
   "app/focus/service.py": {
-    "mtime": 1790595818.8844254,
-    "ast_hash": "99e4e6e67e4f4e9408b7f9cde1867313",
+    "mtime": 1790713671.504168,
+    "ast_hash": "704177a6f38c63748e2ab6ef73ac0b54",
     "semantic_hash": ""
   },
   "app/sync/RESERV.py": {
@@ -510,28 +510,128 @@
     "semantic_hash": ""
   },
   "stats-router-extract.md": {
-    "mtime": 1790414215.9829657,
-    "ast_hash": "55bcbb80d0e566ba5f33779d82b0339f",
+    "mtime": 1790622837.601495,
+    "ast_hash": "3e94aba44b682b26a477b4e03a76f4eb",
     "semantic_hash": ""
   },
-  "get_token.py": {
-    "mtime": 1790450410.1909754,
-    "ast_hash": "aa0382fe9f503177f944f42822364e12",
+  "debug_actual_test.py": {
+    "mtime": 1790713176.0996735,
+    "ast_hash": "1aeaab6901f26ea8e69732119a37ce79",
     "semantic_hash": ""
   },
-  "cookies.txt": {
-    "mtime": 1790452263.0088072,
-    "ast_hash": "410952950a15caba25d19fa702b80f15",
+  "debug_race_test.py": {
+    "mtime": 1790713135.837815,
+    "ast_hash": "946936f3feecfbe69220cc884105bafc",
     "semantic_hash": ""
   },
-  "curl_output.txt": {
-    "mtime": 1790591299.287659,
-    "ast_hash": "9d023bfa14bc8ef5ddc4a21c37730676",
+  "simple_lock_test.py": {
+    "mtime": 1790713334.6902072,
+    "ast_hash": "6c7efbd0fdb498c59bf7cbd9610cfe01",
     "semantic_hash": ""
   },
-  "error.txt": {
-    "mtime": 1790453618.0982943,
-    "ast_hash": "e3ec2189f41474cd95804209eec14531",
+  "test_api_integration.py": {
+    "mtime": 1790622837.606498,
+    "ast_hash": "686b930a94e25c38813d9d9a37d553cf",
+    "semantic_hash": ""
+  },
+  "test_get_current_lesson_fix.py": {
+    "mtime": 1790622837.6135106,
+    "ast_hash": "07239cffe11614826a37757d89971faf",
+    "semantic_hash": ""
+  },
+  "tests/test_focus_completion.py": {
+    "mtime": 1790708584.6994307,
+    "ast_hash": "9728048370c3e69d69cd56797e6ba78c",
+    "semantic_hash": ""
+  },
+  "tests/test_focus_evidence.py": {
+    "mtime": 1790704296.4330134,
+    "ast_hash": "9754e9fae0d03fe45cabc40abc44ad5a",
+    "semantic_hash": ""
+  },
+  "tests/test_focus_race_condition.py": {
+    "mtime": 1790710015.7480032,
+    "ast_hash": "4775db47e63112fabd0adfdc8de21d5f",
+    "semantic_hash": ""
+  },
+  "tests/test_postgres_concurrency.py": {
+    "mtime": 1790713439.4490228,
+    "ast_hash": "350159048edfb94ae8b97d7df08e0774",
+    "semantic_hash": ""
+  },
+  "PHASE_3B_3_1_RESULT.md": {
+    "mtime": 1790622837.586495,
+    "ast_hash": "3740fd40676631a09c93472ca3374a9d",
+    "semantic_hash": ""
+  },
+  "PHASE_3B_3_2_FINAL.md": {
+    "mtime": 1790622837.5914943,
+    "ast_hash": "4e97c9da41812cd3da9f2d22eb7ee20e",
+    "semantic_hash": ""
+  },
+  "PHASE_3B_3_RESULT.md": {
+    "mtime": 1790622837.596495,
+    "ast_hash": "9b92073176ef09bec371775a10dc97da",
+    "semantic_hash": ""
+  },
+  "PHASE_4_AUDIT.md": {
+    "mtime": 1790623216.413414,
+    "ast_hash": "c50af3549fdffd1094a5b882c3e3952b",
+    "semantic_hash": ""
+  },
+  "PHASE_5_AUDIT.md": {
+    "mtime": 1790670471.3304572,
+    "ast_hash": "d1afc9948d1ed2c9f9eb84e87eb469ec",
+    "semantic_hash": ""
+  },
+  "PHASE_5_VERIFICATION_REPORT.md": {
+    "mtime": 1790704516.694236,
+    "ast_hash": "520b9f4b8cfecd80065a0cf29237bf87",
+    "semantic_hash": ""
+  },
+  "PHASE_6_AUDIT.md": {
+    "mtime": 1790672184.4540389,
+    "ast_hash": "1c08e06be6ede86c9d43638ec753fe2d",
+    "semantic_hash": ""
+  },
+  "PHASE_6_STATUS.md": {
+    "mtime": 1790691393.8589318,
+    "ast_hash": "ce205391e4a9e41d737706a75f9cf9b3",
+    "semantic_hash": ""
+  },
+  "PHASE_7_AUDIT.md": {
+    "mtime": 1790691753.9966912,
+    "ast_hash": "fbf48bb419442b871a9a54a6a5587c5c",
+    "semantic_hash": ""
+  },
+  "PHASE_7_STATUS.md": {
+    "mtime": 1790692091.6262352,
+    "ast_hash": "98f754161299988e63ba03201f705e16",
+    "semantic_hash": ""
+  },
+  "PHASE_8_AUDIT.md": {
+    "mtime": 1790692293.5868452,
+    "ast_hash": "733e9547f11fceb0e7f7a448a579548c",
+    "semantic_hash": ""
+  },
+  "PHASE_8_STATUS.md": {
+    "mtime": 1790692346.7085805,
+    "ast_hash": "1ceac73ecc295cc9e09096a6d9df216a",
+    "semantic_hash": ""
+  },
+  "PHASE_9_AUDIT.md": {
+    "mtime": 1790710571.848613,
+    "ast_hash": "a694deac992a17b69a38831ca47b1696",
+    "semantic_hash": ""
+  },
+  "RECOVERY_AUDIT.md": {
+    "mtime": 1790596717.0927932,
+    "ast_hash": "3d94cf5c666ab6bdfe3824fcbbf77cff",
+    "semantic_hash": ""
+  },
+  "roadmap.md": {
+    "mtime": 1790618062.0297382,
+    "ast_hash": "68d08705acf06865d87890b183d44591",
     "semantic_hash": ""
   }
 }

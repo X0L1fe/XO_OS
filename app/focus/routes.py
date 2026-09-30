@@ -10,7 +10,7 @@ from app.auth.service import get_current_user, get_current_active_user
 from app.database.db import db
 from app.database.models import User
 from app.focus.service import FocusService
-from app.ai.verification import AIVerificationService, get_ai_verification_service
+from app.ai.verification import AIVerificationService, get_ai_verification_service, VerificationResult
 from app.event import publish_focus_updated, publish_gamification_updated
 
 logger = logging.getLogger(__name__)
@@ -146,29 +146,26 @@ async def complete_focus_session(
             if background_tasks is None:
                 # If no background tasks, we'll run it synchronously (not ideal, but for simplicity)
                 # In a real app, we should use a background task or a queue.
+                # Reload evidence from DB for this session
+                evidence_objs = focus_service.get_evidence_for_session(session_obj.id)
+                # Convert to list of dicts for AI service
+                evidence_list = []
+                for ev in evidence_objs:
+                    evidence_list.append({
+                        "type": ev.type,
+                        "content": ev.content,
+                        "file_path": ev.file_path
+                    })
+
                 verification_result = await ai_service.verify_evidence(
                     goal=session_obj.goal_text or "",
-                    evidence=evidence or [],
+                    evidence=evidence_list,
                 )
-                # Update the session with the verification result
-                session_obj.verification_status = (
-                    "approved" if verification_result.approved else "rejected"
+                focus_service.process_ai_verification_result(
+                    current_user.id, verification_result, session_obj
                 )
-                # If approved, award base XP (10) plus bonus based on score
-                base_xp = 10
-                bonus_xp = int(verification_result.score * 10)  # 0-10 bonus
-                total_xp = base_xp + bonus_xp
-                session_obj.xp_awarded = total_xp
-                # Award the XP
-                focus_service._award_xp(
-                    user_id=current_user.id,
-                    amount=total_xp,
-                    reason="focus_verified",
-                    source_id=session_obj.id,
-                )
-                # Update the session in the database
-                session.commit()
-                session.refresh(session_obj)
+                # Publish focus updated event for the final state
+                publish_focus_updated(current_user.id)
             else:
                 # Add a background task to handle the AI verification and XP awarding
                 background_tasks.add_task(
@@ -246,43 +243,36 @@ async def _process_ai_verification(
             ai_service  # The AI service doesn't hold db state, so we can reuse
         )
 
-        # Verify the evidence
-        verification_result = await local_ai_service.verify_evidence(
-            goal=goal,
-            evidence=evidence,
-        )
-
-        # Get the session
-        session = local_focus_service.get_session(
-            session_id=session_id, user_id=user_id
-        )
+        # Get the session and verify ownership with lock to prevent race conditions
+        session = local_focus_service.db.query(FocusSession).filter(
+            FocusSession.id == session_id,
+            FocusSession.user_id == user_id
+        ).with_for_update().first()
         if not session:
             logger.error(
                 f"Session {session_id} not found for user {user_id} during AI verification"
             )
             return
 
-        # Update the session with the verification result
-        if verification_result.approved:
-            session.verification_status = "approved"
-        else:
-            session.verification_status = "rejected"
+        # Reload evidence from DB for this session
+        evidence_objs = local_focus_service.get_evidence_for_session(session_id)
+        # Convert to list of dicts for AI service
+        evidence_list = []
+        for ev in evidence_objs:
+            evidence_list.append({
+                "type": ev.type,
+                "content": ev.content,
+                "file_path": ev.file_path
+            })
 
-        # Calculate XP: base 10 + bonus up to 10 based on score
-        base_xp = 10
-        bonus_xp = int(verification_result.score * 10)  # 0-10
-        total_xp = base_xp + bonus_xp
-        session.xp_awarded = total_xp
+        # Verify the evidence
+        verification_result = await local_ai_service.verify_evidence(
+            goal=goal,
+            evidence=evidence_list,
+        )
 
-        # Commit the session update
-        db.commit()
-
-        # Award the XP (this will update UserStats and emit events)
-        local_focus_service._award_xp(
-            user_id=user_id,
-            amount=total_xp,
-            reason="focus_verified",
-            source_id=session.id,
+        local_focus_service.process_ai_verification_result(
+            user_id, verification_result, session
         )
 
         # Publish focus updated event
@@ -356,7 +346,7 @@ async def get_focus_session(
 async def add_evidence_to_focus_session(
     session_id: int = Path(..., gt=0),
     evidence: dict = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Add evidence to a focus session.

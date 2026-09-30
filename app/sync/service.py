@@ -333,15 +333,15 @@ class SyncService:
             room_str = lesson.room or "Не указана"
             description_str = lesson.description or ""
 
-            content = f"""# {lesson.subject}
-
-**Тип:** {lesson.lesson_type}
-**Категория:** {lesson.category}
-**Преподаватель:** {teacher_str}
-**Аудитория:** {room_str}
-**Описание:** {description_str}
-**Время:** {start_time_str} - {end_time_str}
-"""
+            content = f"""
+                # {lesson.subject}
+                **Тип:** {lesson.lesson_type}
+                **Категория:** {lesson.category}
+                **Преподаватель:** {teacher_str}
+                **Аудитория:** {room_str}
+                **Описание:** {description_str}
+                **Время:** {start_time_str} - {end_time_str}
+                """
 
             # Write the file
             with open(file_path, "w", encoding="utf-8") as f:
@@ -359,7 +359,8 @@ class SyncService:
     ) -> None:
         """
         Update user statistics and gamification data.
-        Awards XP for imported lessons, updates streak based on daily activity.
+        Does NOT award XP for imported lessons (XP only for completed focus sessions).
+        Updates streak based on daily activity.
         """
         with self.db.session() as session:
             # Get or create the stats row (singleton pattern)
@@ -370,14 +371,11 @@ class SyncService:
                 stats = UserStats(
                     user_id=user_id,
                     level=1,
+                    max_streak=0,
                 )
                 session.add(stats)
 
-            # Calculate XP: 10 XP per lesson imported
-            xp_earned = lessons_imported * 10
-            stats.total_xp += xp_earned
-
-            # Update streak
+            # Update streak based on lesson import activity
             today = datetime.now(timezone.utc).date()
             if stats.last_activity_date:
                 last_activity = stats.last_activity_date.date()
@@ -397,11 +395,6 @@ class SyncService:
             # Update max streak if needed
             if stats.current_streak > stats.max_streak:
                 stats.max_streak = stats.current_streak
-
-            # Update level based on total XP (every 1000 XP = 1 level)
-            new_level = (stats.total_xp // 1000) + 1
-            if new_level > stats.level:
-                stats.level = new_level
 
             # Update last activity date
             stats.last_activity_date = datetime.now(timezone.utc)
@@ -553,6 +546,7 @@ class SyncService:
                 stats = UserStats(
                     user_id=user_id,
                     level=1,
+                    max_streak=0,
                 )
                 session.add(stats)
                 session.commit()

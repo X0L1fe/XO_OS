@@ -82,6 +82,7 @@ from app.mais_parser import (
 )
 from app.schedule import router as schedule_router
 from app.stats import router as stats_router
+from app.stats.service import _as_aware_utc
 from app.sync.service import SyncService
 from app.telegram.schemas import (
     TelegramLinkResponse,
@@ -766,7 +767,13 @@ def get_now(
             else:
                 end_time = now
 
-            total_duration = (end_time - active_session.started_at).total_seconds()
+            started_at = _as_aware_utc(active_session.started_at)
+            end_time = (
+                _as_aware_utc(active_session.ended_at)
+                if active_session.ended_at
+                else now
+            )
+            total_duration = (end_time - started_at).total_seconds()
             elapsed_seconds = int(total_duration - active_session.total_paused_seconds)
 
             # Get the lesson if associated
@@ -1545,7 +1552,9 @@ async def periodic_mais_check():
                     if last_mais_check is not None:
                         # Ensure last_mais_check is offset-aware in UTC for subtraction
                         if last_mais_check.tzinfo is None:
-                            last_mais_check = last_mais_check.replace(tzinfo=timezone.utc)
+                            last_mais_check = last_mais_check.replace(
+                                tzinfo=timezone.utc
+                            )
                         else:
                             last_mais_check = last_mais_check.astimezone(timezone.utc)
 

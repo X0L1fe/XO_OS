@@ -18,6 +18,7 @@ from app.database.models import (
 # Import event publishing functions
 from app.event import publish_focus_updated, publish_gamification_updated
 
+from app.ai.verification import VerificationResult
 # Import shared schedule filter helpers
 from app.common.schedule_filters import (
     normalize_schedule_category,
@@ -151,15 +152,14 @@ class FocusService:
         If completion_mode is "ai_verified", we start the AI verification process (asynchronous) and set verification_status to "pending".
         The actual XP awarding for AI verification will happen after the verification completes.
         """
-        session = (
-            self.db.query(FocusSession)
-            .filter(
-                FocusSession.id == session_id,
-                FocusSession.user_id == user_id,
-                FocusSession.status.in_(["active", "paused"]),
-            )
-            .first()
+        session_query = self.db.query(FocusSession).filter(
+            FocusSession.id == session_id,
+            FocusSession.user_id == user_id,
+            FocusSession.status.in_(["active", "paused"]),
         )
+        session_query = session_query.with_for_update()
+        session = session_query.first()
+
         if not session:
             raise ValueError("Focus session not found or not in a completable state")
 
@@ -197,20 +197,18 @@ class FocusService:
         productive_duration = total_duration - session.total_paused_seconds
         session.duration_seconds = int(total_duration)
 
-        # If the session was paused, we need to adjust the ended_at? Actually, we set ended_at to now, and productive_duration is total_duration minus paused time.
-        # We'll store the productive duration separately if needed, but for now we only store total duration.
-
         # Save evidence if provided
         if evidence:
             for ev in evidence:
+                evidence_type, content, file_path = self._validate_and_prepare_evidence(ev)
                 new_evidence = FocusEvidence(
                     focus_session_id=session.id,
-                    type=ev["type"],
-                    content=ev.get("content", ""),
-                    file_path=ev.get("file_path"),
+                    type=evidence_type,
+                    content=content,
+                    file_path=file_path,
                 )
                 self.db.add(new_evidence)
-            session.evidence_provided = True
+                session.evidence_provided = True
 
         session.completion_mode = completion_mode
         session.status = "completed"
@@ -240,13 +238,6 @@ class FocusService:
         else:
             raise ValueError("Invalid completion mode")
 
-        # For manual completion, we commit the session and award XP
-        self.db.commit()
-        self.db.refresh(session)
-
-        # Publish focus updated event
-        publish_focus_updated(user_id)
-
         return session
 
     def _award_xp(
@@ -269,7 +260,7 @@ class FocusService:
         # Update UserStats
         stats = self.db.query(UserStats).filter(UserStats.user_id == user_id).first()
         if not stats:
-            stats = UserStats(user_id=user_id)
+            stats = UserStats(user_id=user_id, total_xp=0, level=1, max_streak=0)
             self.db.add(stats)
 
         stats.total_xp += amount
@@ -315,14 +306,26 @@ class FocusService:
             .first()
         )
 
-    def get_session(self, session_id: int, user_id: int) -> Optional[FocusSession]:
+    def get_session(self, session_id: int, user_id: int, for_update: bool = False) -> Optional[FocusSession]:
         """
         Get a focus session by ID, ensuring it belongs to the user.
         """
+        query = self.db.query(FocusSession).filter(
+            FocusSession.id == session_id, FocusSession.user_id == user_id
+        )
+        if for_update:
+            query = query.with_for_update()
+        return query.first()
+
+    def get_evidence_for_session(self, session_id: int) -> List[FocusEvidence]:
+        """
+        Get all evidence for a focus session.
+        """
         return (
-            self.db.query(FocusSession)
-            .filter(FocusSession.id == session_id, FocusSession.user_id == user_id)
-            .first()
+            self.db.query(FocusEvidence)
+            .filter(FocusEvidence.focus_session_id == session_id)
+            .order_by(FocusEvidence.id)
+            .all()
         )
 
     def get_current_lesson(self, user_id: int) -> Optional[Lesson]:
@@ -369,6 +372,34 @@ class FocusService:
         """
         return get_schedule_exclusions(self.db, user_id)
 
+    def _validate_and_prepare_evidence(self, evidence: dict) -> tuple[str, str, Optional[str]]:
+        """
+        Validate and prepare evidence for storage.
+        Returns a tuple of (type, content, file_path).
+        Raises ValueError if evidence is invalid.
+        """
+        if not isinstance(evidence, dict):
+            raise ValueError("Evidence must be a dictionary")
+
+        evidence_type = evidence.get("type")
+        if evidence_type not in ["text", "url", "image", "file"]:
+            raise ValueError(f"Invalid evidence type: {evidence_type}. Must be one of: text, url, image, file")
+
+        content = evidence.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Evidence content must be a non-empty string")
+
+        # For URL type, validate that it looks like a URL
+        if evidence_type == "url":
+            if not (content.startswith("http://") or content.startswith("https://")):
+                raise ValueError("URL must start with http:// or https://")
+
+        file_path = evidence.get("file_path")
+        if file_path is not None and not isinstance(file_path, str):
+            raise ValueError("file_path must be a string if provided")
+
+        return evidence_type, content.strip(), file_path
+
     def add_evidence(
         self, session_id: int, user_id: int, evidence: dict
     ) -> FocusEvidence:
@@ -383,11 +414,12 @@ class FocusService:
                 "Cannot add evidence to a session that is not active or paused"
             )
 
+        evidence_type, content, file_path = self._validate_and_prepare_evidence(evidence)
         new_evidence = FocusEvidence(
             focus_session_id=session.id,
-            type=evidence["type"],
-            content=evidence.get("content", ""),
-            file_path=evidence.get("file_path"),
+            type=evidence_type,
+            content=content,
+            file_path=file_path,
         )
         self.db.add(new_evidence)
         session.evidence_provided = True
@@ -398,3 +430,51 @@ class FocusService:
         publish_focus_updated(user_id)
 
         return new_evidence
+
+    def process_ai_verification_result(
+        self,
+        user_id: int,
+        verification_result: VerificationResult,
+        session: FocusSession,
+    ) -> None:
+        """
+        Process AI verification result and award XP accordingly.
+        This method centralizes XP awarding for AI verification in the service layer.
+        """
+        # Idempotency: if session is already in a final state, do nothing
+        if session.verification_status != "pending":
+            return
+
+        # Define technical error reason indicators
+        error_indicators = [
+            "Failed to parse AI response",
+            "Empty response from AI",
+            "AI verification error",
+        ]
+        # Check if the reason indicates a technical error
+        is_technical_error = any(
+            verification_result.reason.startswith(indicator)
+            for indicator in error_indicators
+        )
+
+        if is_technical_error:
+            # Technical verification failure -> set status to error, no XP
+            session.verification_status = "error"
+            self.db.commit()
+            return
+
+        if verification_result.approved:
+            # Successful verification -> approved, award XP based on score
+            session.verification_status = "approved"
+            # Award XP based on score (base 10 + bonus up to 10)
+            base_xp = 10
+            bonus_xp = int(verification_result.score * 10)  # 0-10
+            total_xp = base_xp + bonus_xp
+            session.xp_awarded = total_xp
+            # Award the XP via the internal method
+            self._award_xp(user_id, total_xp, "focus_verified", session.id)
+        else:
+            # AI rejected evidence -> rejected, no XP
+            session.verification_status = "rejected"
+            self.db.commit()
+            return

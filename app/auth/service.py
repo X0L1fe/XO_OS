@@ -18,14 +18,25 @@ from app.email.service import EmailService
 
 logger = logging.getLogger(__name__)
 
-# Try pbkdf2_sha256 if bcrypt has issues
-try:
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    # Test if bcrypt works
-    pwd_context.hash("test")
-except Exception as e:
-    print(f"Bcrypt initialization failed: {e}, falling back to pbkdf2_sha256")
-    pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
+# На случай если bcrypt отвалится будет использоваться pbkdf2_sha256
+def _make_context() -> CryptContext:
+    try:
+        ctx = CryptContext(
+            schemes=["bcrypt", "pbkdf2_sha256"],
+            deprecated="auto",
+        )
+        ctx.hash("test")  # проверяем, что bcrypt действительно работает
+        return ctx
+    except Exception as e:
+        print(f"Bcrypt initialization failed: {e}, falling back to pbkdf2_sha256")
+        return CryptContext(
+            schemes=["pbkdf2_sha256", "bcrypt"],
+            deprecated="auto",
+        )
+
+
+pwd_context = _make_context()
 
 
 # Dependency to get current user from session cookie
