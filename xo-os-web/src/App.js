@@ -159,7 +159,7 @@ function App() {
                 <div className="w-[65%] flex flex-col space-y-4">
                   <PlayerCard user={user} />
                   <NowBlock />
-                  <ScheduleList />
+                  <ScheduleList mode="today" />
                   <RecentChanges />
                   <div className="flex-1"></div> {/* Lower left area - free space */}
                 </div>
@@ -175,7 +175,7 @@ function App() {
                 </div>
               </div>
             )}
-            {section === "schedule" && <ScheduleList />}
+            {section === "schedule" && <ScheduleList mode="all" />}
             {section === "stats" && <StatsSection />}
             {section === "achievements" && <Achievements />}
             {section === "settings" && <Settings />}

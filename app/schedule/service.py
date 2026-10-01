@@ -162,9 +162,14 @@ class ScheduleService:
             "excluded_subjects": sorted(subjects_set),
         }
 
-    def get_today_schedule(self, user_id: int) -> List[Dict[str, Any]]:
+    def get_today_schedule(
+        self,
+        user_id: int,
+        mode: str = "today",
+    ) -> List[Dict[str, Any]]:
         """
-        Get today's schedule for the user, applying exclusions.
+        mode="today" — только сегодняшние занятия;
+        mode="all"   — всё расписание пользователя.
         """
         now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -175,23 +180,27 @@ class ScheduleService:
             self.db, user_id
         )
 
+        query = self.db.query(Lesson).filter(Lesson.user_id == user_id)
         # Query lessons for today
-        lessons = (
-            self.db.query(Lesson)
-            .filter(
-                Lesson.user_id == user_id,
+        if mode == "today":
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            query = query.filter(
                 Lesson.start_time >= today_start,
                 Lesson.start_time <= today_end,
             )
-            .order_by(Lesson.start_time)
-            .all()
-        )
 
-        # Filter lessons based on exclusions and format response
-        result = []
+        lessons = query.order_by(Lesson.start_time).all()
+
+        result: List[Dict[str, Any]] = []
+
         for lesson in lessons:
             # Check if lesson is visible (not excluded)
-            if not lesson_is_visible(lesson, excluded_categories, excluded_subjects):
+            if not lesson_is_visible(
+                lesson,
+                excluded_categories,
+                excluded_subjects,
+            ):
                 continue
 
             # Normalize category for display
@@ -201,7 +210,11 @@ class ScheduleService:
                 {
                     "id": lesson.id,
                     "stable_id": lesson.stable_id,
+                    "date": lesson.start_time.date().isoformat(),
                     "time": lesson.start_time.strftime("%H:%M"),
+                    "end_time": (
+                        lesson.end_time.strftime("%H:%M") if lesson.end_time else None
+                    ),
                     "subject": lesson.subject,
                     "type": lesson.lesson_type,
                     "category": category,

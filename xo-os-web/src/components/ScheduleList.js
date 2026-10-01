@@ -35,7 +35,10 @@ const DEFAULT_CATEGORIES = [
   },
 ];
 
-export default function ScheduleList() {
+const ITEM_HEIGHT_PX = 100;
+const VISIBLE_ITEMS_BEFORE_SCROLL = 6;
+
+export default function ScheduleList({ mode = "today" }) {
   const instanceIdRef = useRef(
     `schedule-${Math.random().toString(36).slice(2)}`
   );
@@ -57,34 +60,35 @@ export default function ScheduleList() {
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [subjectSearch, setSubjectSearch] = useState("");
 
-  const loadSchedule = useCallback(async (showLoader = false) => {
-    if (showLoader) {
-      setLoading(true);
-    } else {
-      setRefreshing(true);
-    }
-
-    try {
-      const response = await fetch("/api/schedule", {
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+  const loadSchedule = useCallback(
+    async (showLoader = false) => {
+      if (showLoader) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
       }
 
-      const data = await response.json();
+      try {
+        const response = await fetch(`/api/schedule?mode=${mode}`, {
+          credentials: "include",
+        });
 
-      setSchedule(Array.isArray(data) ? data : []);
-      setError(null);
-    } catch (err) {
-      console.error("Failed to fetch schedule:", err);
-      setError(err.message || "Не удалось загрузить расписание");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        setSchedule(Array.isArray(data) ? data : []);
+        setError(null);
+      } catch (err) {
+        console.error("Failed to fetch schedule:", err);
+        setError(err.message || "Не удалось загрузить расписание");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+  }, [mode]);
 
   const loadFilters = useCallback(async () => {
     try {
@@ -399,7 +403,13 @@ export default function ScheduleList() {
         return categoryKey || "Занятия";
     }
   };
+  const headerTitle =
+  mode === "all" ? "Расписание" : "Ближайшие занятия";
 
+  const headerSubtitle =
+    mode === "all"
+      ? "Все занятия из расписания"
+      : "Предстоящие события из расписания";
   if (loading) {
     return (
       <section className="rounded-xl border border-border bg-panel p-5">
@@ -408,6 +418,8 @@ export default function ScheduleList() {
           refreshing={false}
           excludedCount={0}
           onFilterClick={() => { }}
+          title={headerTitle}
+          subtitle={headerSubtitle}
         />
 
         <div className="flex min-h-[180px] items-center justify-center">
@@ -425,6 +437,8 @@ export default function ScheduleList() {
           refreshing={refreshing}
           excludedCount={excludedCount}
           onFilterClick={() => setShowFilterMenu((value) => !value)}
+          title={headerTitle}
+          subtitle={headerSubtitle}
         />
 
         <div className="flex min-h-[180px] flex-col items-center justify-center text-center">
@@ -456,9 +470,9 @@ export default function ScheduleList() {
           showFilter={true}
           refreshing={refreshing}
           excludedCount={excludedCount}
-          onFilterClick={() =>
-            setShowFilterMenu((value) => !value)
-          }
+          onFilterClick={() => setShowFilterMenu((value) => !value)}
+          title={headerTitle}
+          subtitle={headerSubtitle}
         />
 
         {showFilterMenu && (
@@ -674,12 +688,17 @@ export default function ScheduleList() {
       ) : (
         <div
           className="
-    h-[300px]
-    overflow-y-auto
-    overscroll-contain
-    pr-1
-    fcc-scrollbar
-  "
+            overflow-y-auto
+            overscroll-contain
+            pr-1
+            fcc-scrollbar
+          "
+          style={{
+          maxHeight: `${
+            Math.min(schedule.length, VISIBLE_ITEMS_BEFORE_SCROLL) *
+            ITEM_HEIGHT_PX
+          }px`,
+    }}
         >
           <div className="divide-y divide-border/60">
             {schedule.map((item, index) => {
@@ -802,6 +821,8 @@ function ScheduleHeader({
   refreshing,
   excludedCount,
   onFilterClick,
+  title = "Ближайшие занятия",
+  subtitle = "Предстоящие события из расписания",
 }) {
   return (
     <div className="flex min-w-0 flex-1 items-start justify-between gap-4">
@@ -812,11 +833,11 @@ function ScheduleHeader({
 
         <div className="min-w-0">
           <h2 className="truncate text-lg font-bold text-text-primary">
-            Ближайшие занятия
+            {title}
           </h2>
 
           <p className="mt-0.5 text-xs text-text-muted">
-            Предстоящие события из расписания
+            {subtitle}
           </p>
         </div>
       </div>

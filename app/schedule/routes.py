@@ -1,4 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+)
 from sqlalchemy.orm import Session
 
 from app.auth.service import get_current_active_user
@@ -41,6 +46,7 @@ def update_schedule_filters(
 @router.get("", include_in_schema=True)
 @router.get("/", include_in_schema=False)
 def get_today_schedule(
+    mode: str = Query(default="today", pattern="^(today|all)$"),
     current_user: User = Depends(get_current_active_user),
 ):
     """
@@ -48,4 +54,4 @@ def get_today_schedule(
     """
     with db.session() as session:
         service = ScheduleService(session)
-        return service.get_today_schedule(current_user.id)
+        return service.get_today_schedule(current_user.id, mode=mode)
