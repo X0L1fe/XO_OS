@@ -1,17 +1,33 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Path,
+    UploadFile,
+    status,
+)
 
-from app.auth.service import get_current_user, get_current_active_user
+from app.ai.verification import (
+    AIVerificationService,
+    VerificationResult,
+    get_ai_verification_service,
+)
+from app.auth.service import get_current_active_user, get_current_user
 from app.database.db import db
-from app.database.models import User
-from app.focus.service import FocusService
-from app.ai.verification import AIVerificationService, get_ai_verification_service, VerificationResult
+from app.database.models import FocusSession, User
 from app.event import publish_focus_updated, publish_gamification_updated
+from app.focus.service import FocusService
+from app.focus.storage import delete_evidence_image, save_evidence_image
 
 logger = logging.getLogger(__name__)
 
@@ -104,26 +120,24 @@ async def resume_focus_session(
 @router.post("/{session_id}/complete", status_code=status.HTTP_200_OK)
 async def complete_focus_session(
     session_id: int = Path(..., gt=0),
-    completion_mode: str = "manual",
-    evidence: Optional[List[dict]] = None,
+    completion_mode: str = Body("manual", embed=True),
     background_tasks: BackgroundTasks = None,
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    Complete a focus session.
-    If completion_mode is "manual", we award base XP (3 XP) immediately.
-    If completion_mode is "ai_verified", we set verification_status to pending and award XP after verification.
+    Завершите фокус-сессию.
+    Если для режима завершения выбрано значение «ручной», мы немедленно начисляем базовый опыт (3 опыта).
+    Если для завершения_режима установлено значение «ai_verified», мы устанавливаем для проверки_статуса значение «ожидание» и начисляем XP после проверки.
     """
     with db.session() as session:
         focus_service = FocusService(session)
-        ai_service = get_ai_verification_service()
+
         try:
             # First, complete the session (this sets ended_at, etc.)
             session_obj = focus_service.complete_focus_session(
                 session_id=session_id,
                 user_id=current_user.id,
                 completion_mode=completion_mode,
-                evidence=evidence,
             )
         except ValueError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -141,25 +155,27 @@ async def complete_focus_session(
             }
 
         elif completion_mode == "ai_verified":
-            # For AI verification, we have set the session to pending verification.
-            # We need to trigger the AI verification in the background.
+            ai_service = get_ai_verification_service()
+            # Для проверки AI мы установили сеанс в режим ожидания проверки.
+            # Нам нужно запустить проверку ИИ в фоновом режиме.
             if background_tasks is None:
-                # If no background tasks, we'll run it synchronously (not ideal, but for simplicity)
-                # In a real app, we should use a background task or a queue.
-                # Reload evidence from DB for this session
+                # Если нет фоновых задач, мы запустим их синхронно (не идеально, но для простоты)
+                # В реальном приложении мы должны использовать фоновую задачу или очередь.
+                # Перезагружаем доказательства из БД для этого сеанса
                 evidence_objs = focus_service.get_evidence_for_session(session_obj.id)
-                # Convert to list of dicts for AI service
-                evidence_list = []
-                for ev in evidence_objs:
-                    evidence_list.append({
+                # Преобразование в список диктовок для службы AI
+                evidence_list = [
+                    {
                         "type": ev.type,
                         "content": ev.content,
-                        "file_path": ev.file_path
-                    })
+                        "file_path": ev.file_path,
+                    }
+                    for ev in evidence_objs
+                ]
 
                 verification_result = await ai_service.verify_evidence(
                     goal=session_obj.goal_text or "",
-                    evidence=evidence_list,
+                    evidence_list=evidence_list,
                 )
                 focus_service.process_ai_verification_result(
                     current_user.id, verification_result, session_obj
@@ -172,10 +188,6 @@ async def complete_focus_session(
                     _process_ai_verification,
                     session_id=session_obj.id,
                     user_id=current_user.id,
-                    goal=session_obj.goal_text or "",
-                    evidence=evidence or [],
-                    focus_service=focus_service,
-                    ai_service=ai_service,
                 )
 
             return {
@@ -196,20 +208,30 @@ async def complete_focus_session(
 
 def _calculate_elapsed_seconds(session) -> int:
     """
-    Calculate the elapsed seconds for a session, accounting for pauses.
-    """
-    if not session.ended_at:
-        # Still active or paused
-        end_time = datetime.now(timezone.utc)
-    else:
-        end_time = session.ended_at
+    Подсчитайте продуктивные секунды, затраченные на фокус-сессию.
 
-    # Ensure both datetimes are offset-aware in UTC
+    Для активной сессии:
+        прошедшее = сейчас - начало_в - всего_пауз_секунд
+
+    Для приостановленного сеанса:
+        истекшее = пауза_в - начатое_в - общее_паузу_секунд
+
+    Для завершенного сеанса:
+        прошедшее = окончание_в - начало_в - общее количество_пауз_секунд
+    """
     started_at = session.started_at
+
     if started_at.tzinfo is None:
         started_at = started_at.replace(tzinfo=timezone.utc)
     else:
         started_at = started_at.astimezone(timezone.utc)
+
+    if session.status == "paused" and session.paused_at:
+        end_time = session.paused_at
+    elif session.ended_at:
+        end_time = session.ended_at
+    else:
+        end_time = datetime.now(timezone.utc)
 
     if end_time.tzinfo is None:
         end_time = end_time.replace(tzinfo=timezone.utc)
@@ -218,72 +240,78 @@ def _calculate_elapsed_seconds(session) -> int:
 
     total_duration = (end_time - started_at).total_seconds()
     productive_duration = total_duration - session.total_paused_seconds
-    return int(productive_duration)
+
+    return max(0, int(productive_duration))
 
 
 async def _process_ai_verification(
     session_id: int,
     user_id: int,
-    goal: str,
-    evidence: list[dict],
-    focus_service: FocusService,
-    ai_service: AIVerificationService,
 ):
     """
-    Background task to process AI verification and award XP.
+    Фоновая проверка evidence через AI и начисление XP.
+    Все зависимости создаются внутри, привязанные к отдельной сессии БД,
+    потому что сессия запроса к этому моменту уже закрыта.
     """
-    # We need a new database session for the background task
-    from app.database import SessionLocal
+    from app.ai.verification import get_ai_verification_service
+    from app.database.db import db as db_module
 
-    db = SessionLocal()
+    db_session = db_module.SessionLocal()
     try:
-        # Re-create the services with the new db session
-        local_focus_service = FocusService(db)
-        local_ai_service = (
-            ai_service  # The AI service doesn't hold db state, so we can reuse
-        )
+        local_focus_service = FocusService(db_session)
+        local_ai_service = get_ai_verification_service()
 
-        # Get the session and verify ownership with lock to prevent race conditions
-        session = local_focus_service.db.query(FocusSession).filter(
-            FocusSession.id == session_id,
-            FocusSession.user_id == user_id
-        ).with_for_update().first()
+        session = (
+            db_session.query(FocusSession)
+            .filter(
+                FocusSession.id == session_id,
+                FocusSession.user_id == user_id,
+            )
+            .with_for_update()
+            .first()
+        )
         if not session:
             logger.error(
-                f"Session {session_id} not found for user {user_id} during AI verification"
+                "Session %s not found for user %s during AI verification",
+                session_id,
+                user_id,
             )
             return
 
-        # Reload evidence from DB for this session
         evidence_objs = local_focus_service.get_evidence_for_session(session_id)
-        # Convert to list of dicts for AI service
-        evidence_list = []
-        for ev in evidence_objs:
-            evidence_list.append({
+        evidence_list = [
+            {
                 "type": ev.type,
                 "content": ev.content,
-                "file_path": ev.file_path
-            })
+                "file_path": ev.file_path,
+            }
+            for ev in evidence_objs
+        ]
 
-        # Verify the evidence
         verification_result = await local_ai_service.verify_evidence(
-            goal=goal,
-            evidence=evidence_list,
+            goal=session.goal_text or "",
+            evidence_list=evidence_list,
+        )
+        logger.info(
+            "AI verification result: approved=%s confidence=%.2f score=%.2f "
+            "reason=%r missing=%r",
+            verification_result.approved,
+            verification_result.confidence,
+            verification_result.score,
+            verification_result.reason,
+            verification_result.missing,
         )
 
         local_focus_service.process_ai_verification_result(
             user_id, verification_result, session
         )
 
-        # Publish focus updated event
         publish_focus_updated(user_id)
 
-        # Note: The _award_xp method commits the transaction, so we don't need to commit again.
     except Exception as e:
-        logger.error(f"Error in AI verification background task: {e}")
-        # Optionally, we could update the session to an error state, but we'll leave it as pending for now.
+        logger.exception("Error in AI verification background task: %s", e)
     finally:
-        db.close()
+        db_session.close()
 
 
 @router.get("/active", status_code=status.HTTP_200_OK)
@@ -345,16 +373,66 @@ async def get_focus_session(
 @router.post("/{session_id}/evidence", status_code=status.HTTP_200_OK)
 async def add_evidence_to_focus_session(
     session_id: int = Path(..., gt=0),
-    evidence: dict = None,
+    evidence_type: str = Form(..., alias="type"),
+    content: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    Add evidence to a focus session.
+    Добавляет evidence к фокус-сессии.
+
+    Принимает multipart/form-data:
+      - text:  type=text,  content=<строка>
+      - url:   type=url,   content=<http(s)://...>
+      - image: type=image, file=<binary>, content=<опционально, оригинальное имя>
     """
-    if not evidence:
+    evidence: dict
+
+    if evidence_type == "image":
+        if file is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Image evidence requires a 'file' upload",
+            )
+        raw_bytes = await file.read()
+        try:
+            file_path = save_evidence_image(
+                user_id=current_user.id,
+                raw_bytes=raw_bytes,
+                filename=file.filename or "",
+                content_type=file.content_type or "",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+        evidence = {
+            "type": "image",
+            "content": (content or file.filename or "image").strip(),
+            "file_path": file_path,
+        }
+
+    elif evidence_type == "url":
+        if not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="URL evidence requires 'content'",
+            )
+        evidence = {"type": "url", "content": content, "file_path": None}
+
+    elif evidence_type == "text":
+        if not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Text evidence requires 'content'",
+            )
+        evidence = {"type": "text", "content": content, "file_path": None}
+
+    else:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Evidence is required"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported evidence type: {evidence_type}",
         )
+
     try:
         with db.session() as session:
             focus_service = FocusService(session)
@@ -368,7 +446,15 @@ async def add_evidence_to_focus_session(
                 "type": new_evidence.type,
                 "content": new_evidence.content,
                 "file_path": new_evidence.file_path,
+                "url": (
+                    f"/static/media/{new_evidence.file_path}"
+                    if new_evidence.file_path
+                    else None
+                ),
                 "created_at": new_evidence.created_at,
             }
     except ValueError as e:
+        # Если файл уже записан, но БД отказала — подчистим за собой
+        if evidence_type == "image":
+            delete_evidence_image(evidence["file_path"])
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

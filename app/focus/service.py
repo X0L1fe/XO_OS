@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from app.ai.verification import VerificationResult
+
+# Import shared schedule filter helpers
+from app.common.schedule_filters import (
+    get_schedule_exclusions,
+    lesson_is_excluded_by_category,
+    lesson_is_excluded_by_subject,
+    lesson_is_visible,
+    normalize_schedule_category,
+)
 from app.database.models import (
     FocusEvidence,
     FocusSession,
@@ -17,16 +29,9 @@ from app.database.models import (
 
 # Import event publishing functions
 from app.event import publish_focus_updated, publish_gamification_updated
+from app.stats.routes import now_msk_naive
 
-from app.ai.verification import VerificationResult
-# Import shared schedule filter helpers
-from app.common.schedule_filters import (
-    normalize_schedule_category,
-    lesson_is_visible,
-    lesson_is_excluded_by_category,
-    lesson_is_excluded_by_subject,
-    get_schedule_exclusions,
-)
+MAI_TZ = ZoneInfo("Europe/Moscow")
 
 
 class FocusService:
@@ -121,7 +126,7 @@ class FocusService:
             return session
 
         # Calculate the paused duration and add to total_paused_seconds
-        now = datetime.now(timezone.utc)
+        now = now_msk_naive()
         # Ensure session.paused_at is offset-aware in UTC
         if session.paused_at.tzinfo is None:
             paused_at = session.paused_at.replace(tzinfo=timezone.utc)
@@ -147,10 +152,10 @@ class FocusService:
         evidence: Optional[List[dict]] = None,
     ) -> FocusSession:
         """
-        Complete a focus session.
-        If completion_mode is "manual", we award base XP and set verification_status to "not_required".
-        If completion_mode is "ai_verified", we start the AI verification process (asynchronous) and set verification_status to "pending".
-        The actual XP awarding for AI verification will happen after the verification completes.
+        Завершите фокус-сессию.
+        Если для завершения_режима установлено значение "manual", мы начисляем базовый опыт и устанавливаем для параметра_статуса_проверки значение "not_required".
+        Если для завершения_режима установлено значение «ai_verified», мы запускаем процесс проверки ИИ (асинхронный) и устанавливаем для verification_status  значение "pending".
+        Фактическое начисление опыта за проверку ИИ произойдет после завершения проверки.
         """
         session_query = self.db.query(FocusSession).filter(
             FocusSession.id == session_id,
@@ -184,6 +189,20 @@ class FocusService:
 
         # Set ended_at and calculate duration
         now = datetime.now(timezone.utc)
+
+        if session.status == "paused" and session.paused_at:
+            paused_at = session.paused_at
+
+            if paused_at.tzinfo is None:
+                paused_at = paused_at.replace(tzinfo=timezone.utc)
+            else:
+                paused_at = paused_at.astimezone(timezone.utc)
+
+            current_pause_duration = (now - paused_at).total_seconds()
+
+            session.total_paused_seconds += int(current_pause_duration)
+            session.paused_at = None
+
         session.ended_at = now
 
         # Ensure session.started_at is offset-aware in UTC
@@ -195,20 +214,7 @@ class FocusService:
         # Calculate total duration and productive duration (excluding pauses)
         total_duration = (session.ended_at - started_at).total_seconds()
         productive_duration = total_duration - session.total_paused_seconds
-        session.duration_seconds = int(total_duration)
-
-        # Save evidence if provided
-        if evidence:
-            for ev in evidence:
-                evidence_type, content, file_path = self._validate_and_prepare_evidence(ev)
-                new_evidence = FocusEvidence(
-                    focus_session_id=session.id,
-                    type=evidence_type,
-                    content=content,
-                    file_path=file_path,
-                )
-                self.db.add(new_evidence)
-                session.evidence_provided = True
+        session.duration_seconds = max(0, int(productive_duration))
 
         session.completion_mode = completion_mode
         session.status = "completed"
@@ -244,10 +250,10 @@ class FocusService:
         self, user_id: int, amount: int, reason: str, source_id: Optional[int] = None
     ) -> None:
         """
-        Award XP to the user and update UserStats.
-        This is called when XP is to be awarded (e.g., after manual completion or after AI verification approval).
+        Наградите пользователя XP и обновите UserStats.
+        Это вызывается, когда необходимо начислить XP (например, после завершения вручную или после одобрения проверки ИИ).
         """
-        # Create XP transaction
+        # Создать транзакцию XP
         xp_transaction = XPTransaction(
             user_id=user_id,
             amount=amount,
@@ -257,48 +263,48 @@ class FocusService:
         )
         self.db.add(xp_transaction)
 
-        # Update UserStats
+        # Обновление UserStats
         stats = self.db.query(UserStats).filter(UserStats.user_id == user_id).first()
         if not stats:
             stats = UserStats(user_id=user_id, total_xp=0, level=1, max_streak=0)
             self.db.add(stats)
 
         stats.total_xp += amount
-        # Update level: every 1000 XP = 1 level
+        # Обновление уровня: каждые 1000 XP = 1 level
         new_level = (stats.total_xp // 1000) + 1
         if new_level > stats.level:
             stats.level = new_level
 
-        # Update streak: we consider today's date for streak
+        # Обновление серии: мы учитываем сегодняшнюю дату серии
         today = datetime.now(timezone.utc).date()
         if stats.last_activity_date:
             last_activity_date = stats.last_activity_date.date()
             if today == last_activity_date:
-                # Same day, streak remains the same (we only increment once per day)
+                # В тот же день, серия остается прежней (мы увеличиваем только один раз в день)
                 pass
             elif today == last_activity_date + timedelta(days=1):
-                # Consecutive day
+                # Последующий день
                 stats.current_streak += 1
             else:
-                # Gap in days, reset streak
+                # Разрыв в днях, полоса сбросов
                 stats.current_streak = 1
         else:
-            # First activity
+            # Первое действие
             stats.current_streak = 1
 
-        # Update max streak if needed
+        # При необходимости обновите максимальную серию
         if stats.current_streak > stats.max_streak:
             stats.max_streak = stats.current_streak
 
         stats.last_activity_date = datetime.now(timezone.utc)
         self.db.commit()
 
-        # Publish gamification updated event
+        # Опубликовать обновленное событие геймификации
         publish_gamification_updated(user_id)
 
     def get_active_session(self, user_id: int) -> Optional[FocusSession]:
         """
-        Get the active focus session for the user, if any.
+        Получите сеанс активного фокуса для пользователя, если таковой имеется.
         """
         return (
             self.db.query(FocusSession)
@@ -306,9 +312,28 @@ class FocusService:
             .first()
         )
 
-    def get_session(self, session_id: int, user_id: int, for_update: bool = False) -> Optional[FocusSession]:
+    def get_current_session(self, user_id: int) -> Optional[FocusSession]:
         """
-        Get a focus session by ID, ensuring it belongs to the user.
+        Получите текущий незавершенный сеанс фокусировки для пользователя.
+
+        Текущая сессия может быть активной или приостановленной.
+        Завершенные сессии не возвращаются.
+        """
+        return (
+            self.db.query(FocusSession)
+            .filter(
+                FocusSession.user_id == user_id,
+                FocusSession.status.in_(["active", "paused"]),
+            )
+            .order_by(FocusSession.id.desc())
+            .first()
+        )
+
+    def get_session(
+        self, session_id: int, user_id: int, for_update: bool = False
+    ) -> Optional[FocusSession]:
+        """
+        Получите сеанс фокусировки по идентификатору, гарантируя, что он принадлежит пользователю.
         """
         query = self.db.query(FocusSession).filter(
             FocusSession.id == session_id, FocusSession.user_id == user_id
@@ -319,7 +344,7 @@ class FocusService:
 
     def get_evidence_for_session(self, session_id: int) -> List[FocusEvidence]:
         """
-        Get all evidence for a focus session.
+        Получите все доказательства для фокус-сессии.
         """
         return (
             self.db.query(FocusEvidence)
@@ -330,10 +355,10 @@ class FocusService:
 
     def get_current_lesson(self, user_id: int) -> Optional[Lesson]:
         """
-        Get the current visible lesson for a user based on current time and schedule exclusions.
-        Backend determines the current lesson - does not trust frontend input.
+        Получите текущий видимый урок для пользователя на основе текущего времени и исключений расписания.
+        Бэкенд определяет текущий урок — не доверяет входным данным фронтенда.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(MAI_TZ).replace(tzinfo=None)
 
         # Get user's schedule exclusions
         excluded_categories, excluded_subjects = self._get_schedule_exclusions(user_id)
@@ -372,31 +397,38 @@ class FocusService:
         """
         return get_schedule_exclusions(self.db, user_id)
 
-    def _validate_and_prepare_evidence(self, evidence: dict) -> tuple[str, str, Optional[str]]:
+    def _validate_and_prepare_evidence(
+        self, evidence: dict
+    ) -> tuple[str, str, Optional[str]]:
         """
-        Validate and prepare evidence for storage.
-        Returns a tuple of (type, content, file_path).
-        Raises ValueError if evidence is invalid.
+        Проверка и подготовка доказательств к хранению.
+        Возвращает кортеж (тип, содержимое, путь к файлу).
+        Вызывает ValueError, если свидетельство недействительно.
         """
         if not isinstance(evidence, dict):
             raise ValueError("Evidence must be a dictionary")
 
         evidence_type = evidence.get("type")
-        if evidence_type not in ["text", "url", "image", "file"]:
-            raise ValueError(f"Invalid evidence type: {evidence_type}. Must be one of: text, url, image, file")
+        if evidence_type not in ["text", "url", "image"]:
+            raise ValueError(
+                f"Invalid evidence type: {evidence_type}. Must be one of: text, url, image"
+            )
 
         content = evidence.get("content")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Evidence content must be a non-empty string")
 
-        # For URL type, validate that it looks like a URL
+        file_path = None  # инициализируем заранее
+
         if evidence_type == "url":
             if not (content.startswith("http://") or content.startswith("https://")):
                 raise ValueError("URL must start with http:// or https://")
-
-        file_path = evidence.get("file_path")
-        if file_path is not None and not isinstance(file_path, str):
-            raise ValueError("file_path must be a string if provided")
+        elif evidence_type == "image":
+            file_path = evidence.get("file_path")
+            if not file_path or not isinstance(file_path, str):
+                raise ValueError(
+                    "file_path is required and must be a non-empty string for image evidence"
+                )
 
         return evidence_type, content.strip(), file_path
 
@@ -414,7 +446,9 @@ class FocusService:
                 "Cannot add evidence to a session that is not active or paused"
             )
 
-        evidence_type, content, file_path = self._validate_and_prepare_evidence(evidence)
+        evidence_type, content, file_path = self._validate_and_prepare_evidence(
+            evidence
+        )
         new_evidence = FocusEvidence(
             focus_session_id=session.id,
             type=evidence_type,
@@ -438,40 +472,48 @@ class FocusService:
         session: FocusSession,
     ) -> None:
         """
-        Process AI verification result and award XP accordingly.
-        This method centralizes XP awarding for AI verification in the service layer.
+        Обработайте результат проверки ИИ и соответствующим образом начислите XP.
+        Этот метод централизует начисление XP за проверку ИИ на уровне обслуживания.
         """
         # Idempotency: if session is already in a final state, do nothing
         if session.verification_status != "pending":
             return
+
+        # Persist the model's explanation for diagnostics / UI
+        session.verification_reason = verification_result.reason
+        session.verification_missing = json.dumps(
+            verification_result.missing, ensure_ascii=False
+        )
 
         # Define technical error reason indicators
         error_indicators = [
             "Failed to parse AI response",
             "Empty response from AI",
             "AI verification error",
+            "No JSON found in AI response",
+            "Invalid AI response fields",
+            "Goal or evidence is missing",
         ]
-        # Check if the reason indicates a technical error
+
         is_technical_error = any(
             verification_result.reason.startswith(indicator)
             for indicator in error_indicators
         )
 
         if is_technical_error:
-            # Technical verification failure -> set status to error, no XP
             session.verification_status = "error"
             self.db.commit()
             return
 
         if verification_result.approved:
-            # Successful verification -> approved, award XP based on score
+            # Успешная проверка -> одобрено, начисляется XP в зависимости от результата.
             session.verification_status = "approved"
-            # Award XP based on score (base 10 + bonus up to 10)
+            # Награждайте XP в зависимости от очков (базовая 10 + бонус до 10)
             base_xp = 10
             bonus_xp = int(verification_result.score * 10)  # 0-10
             total_xp = base_xp + bonus_xp
             session.xp_awarded = total_xp
-            # Award the XP via the internal method
+            # Награждает XP внутренним методом.
             self._award_xp(user_id, total_xp, "focus_verified", session.id)
         else:
             # AI rejected evidence -> rejected, no XP

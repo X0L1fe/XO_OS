@@ -1,0 +1,118 @@
+{
+  "nodes": [
+    {
+      "id": "app_web_robots_txt",
+      "label": "robots.txt",
+      "file_type": "document",
+      "source_file": "D:\\Projects\\XO_OS\\app\\web\\robots.txt",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "docs_readme_md",
+      "label": "README",
+      "file_type": "document",
+      "source_file": "D:\\Projects\\XO_OS\\docs\\README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "docs_documentation_md",
+      "label": "documentation",
+      "file_type": "document",
+      "source_file": "D:\\Projects\\XO_OS\\docs\\documentation.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "xo_os_web_readme_md",
+      "label": "README",
+      "file_type": "document",
+      "source_file": "D:\\Projects\\XO_OS\\xo-os-web\\README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "xo_os_web_public_index_html",
+      "label": "index.html",
+      "file_type": "document",
+      "source_file": "D:\\Projects\\XO_OS\\xo-os-web\\public\\index.html",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "xo_os_web_public_robots_txt",
+      "label": "robots.txt",
+      "file_type": "document",
+      "source_file": "D:\\Projects\\XO_OS\\xo-os-web\\public\\robots.txt",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "app_web_static_media_logo_7ef67485869323ab67e06a06b82bd955_image",
+      "label": "MAISync logo (XO in black rounded rectangle)",
+      "file_type": "image",
+      "source_file": "D:\\Projects\\XO_OS\\app\\web\\static\\media\\logo.7ef67485869323ab67e06a06b82bd955.svg",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "logo_maissync",
+      "label": "MAISync",
+      "file_type": "concept",
+      "source_file": "D:\\Projects\\XO_OS\\logo.png",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "xo_os_web_src_assets_logo_svg",
+      "label": "logo.svg",
+      "file_type": "image",
+      "source_file": "D:\\Projects\\XO_OS\\xo-os-web\\src\\assets\\logo.svg",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    }
+  ],
+  "edges": [
+    {
+      "source": "xo_os_web_readme_md",
+      "target": "app_web_index_html",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "D:\\Projects\\XO_OS\\xo-os-web\\README.md",
+      "source_location": null,
+      "weight": 1.0
+    }
+  ],
+  "hyperedges": [],
+  "input_tokens": 0,
+  "output_tokens": 0
+}

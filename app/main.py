@@ -9,8 +9,27 @@ from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
+
+from app.common.schedule_filters import (
+    get_schedule_exclusions,
+    lesson_is_visible,
+    normalize_schedule_category,
+)
+from app.focus.routes import _calculate_elapsed_seconds
+from app.stats.routes import now_msk_naive
 
 logger = logging.getLogger(__name__)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+)
+
+# Не засоряем вывод INFO-логами сторонних библиотек
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 import httpx
 from fastapi import (
@@ -67,7 +86,11 @@ from app.database.models import (
     XPTransaction,
 )
 from app.email.service import EmailService
-from app.event import publish_focus_updated, publish_gamification_updated
+from app.event import (
+    event_publisher,
+    publish_focus_updated,
+    publish_gamification_updated,
+)
 from app.focus import router as focus_router
 
 # Import for focus session service
@@ -117,7 +140,11 @@ app = FastAPI(title="XO_OS", version="0.1.0")
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
+    allow_origins=[
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://192.168.1.2/:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -129,82 +156,15 @@ db = Database()
 settings = Settings()
 # Obsidian vault path configuration
 OBSIDIAN_CONFIG_PATH = Path("data/obsidian_config.json")
-
+MAI_TZ = ZoneInfo("Europe/Moscow")
 # Server-Sent Events for real-time updates
 # We'll use a simple in-memory dictionary to track active connections
 # In a production app, you would use a proper message queue like Redis Pub/Sub
-active_connections: dict[int, list[asyncio.Queue]] = {}
 
 app.include_router(stats_router, prefix="/api/stats")
 app.include_router(gamification_router, prefix="/api/gamification")
 app.include_router(focus_router, prefix="/api/focus")
 app.include_router(schedule_router, prefix="/api/schedule")
-
-
-async def event_publisher(user_id: int) -> AsyncGenerator[str, None]:
-    """
-    Publish events for a specific user.
-    """
-    # Create a queue for this connection
-    queue: asyncio.Queue = asyncio.Queue()
-
-    # Add the queue to the user's connections
-    if user_id not in active_connections:
-        active_connections[user_id] = []
-    active_connections[user_id].append(queue)
-
-    try:
-        # Send initial connection event
-        yield f"data: {json.dumps({'type': 'connected', 'user_id': user_id})}\n\n"
-
-        # Wait for events to be published
-        while True:
-            # Wait for an event with a timeout for heartbeat
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield f"data: {json.dumps(event)}\n\n"
-                queue.task_done()
-            except asyncio.TimeoutError:
-                # Send heartbeat
-                yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
-    finally:
-        # Remove the queue when the connection closes
-        if user_id in active_connections:
-            if queue in active_connections[user_id]:
-                active_connections[user_id].remove(queue)
-            if not active_connections[user_id]:
-                del active_connections[user_id]
-
-
-def publish_focus_updated(user_id: int):
-    """
-    Publish a focus session updated event to all connections for a user.
-    """
-    if user_id in active_connections:
-        event = {
-            "type": "xo-os:focus-updated",
-            "user_id": user_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        # Put the event in all queues for this user
-        for queue in active_connections[user_id]:
-            # Use put_nowait to avoid blocking, and handle queue full errors
-            try:
-                queue.put_nowait(event)
-            except asyncio.QueueFull:
-                # If queue is full, we just skip this event
-                pass
-
-
-# Import shared schedule filter helpers
-from app.common.schedule_filters import (
-    get_schedule_exclusions,
-    lesson_is_excluded_by_category,
-    lesson_is_excluded_by_subject,
-    lesson_is_visible,
-    normalize_schedule_category,
-    normalize_schedule_value,
-)
 
 # ============================================================
 # DEVELOPMENT ONLY: RESET GAMIFICATION
@@ -746,42 +706,42 @@ def get_now(
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    Return the current state for the NowBlock.
-    This can be:
-      - An active or paused focus session (with details)
-      - The current visible lesson (if any) when no focus session is active
-      - Idle state (no lesson, no focus session)
+    Верните текущее состояние NowBlock.
+    Это может быть:
+      - Активный или приостановленный сеанс фокусировки (с подробностями)
+      - Текущий видимый урок (если есть), когда ни один сеанс фокусировки не активен.
+      - Состояние ожидания (нет урока, нет фокус-сессии)
     """
     with db.session() as session:
         focus_service = FocusService(session)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(MAI_TZ).replace(tzinfo=None)
 
-        # Check for an active focus session
-        active_session = focus_service.get_active_session(user_id=current_user.id)
-        if active_session:
-            # Calculate elapsed seconds (productive time, excluding pauses)
-            elapsed_seconds = 0
-            if active_session.ended_at:
-                # Session is completed (shouldn't happen because we check for active, but just in case)
-                end_time = active_session.ended_at
-            else:
-                end_time = now
+        current_session = focus_service.get_current_session(user_id=current_user.id)
 
-            started_at = _as_aware_utc(active_session.started_at)
-            end_time = (
-                _as_aware_utc(active_session.ended_at)
-                if active_session.ended_at
-                else now
+        # Fallback: недавно завершённая сессия — показываем её 30 минут,
+        # чтобы пользователь увидел результат AI-проверки и начисленный XP.
+        if not current_session:
+            recent_cutoff = now - timedelta(minutes=30)
+            current_session = (
+                session.query(FocusSession)
+                .filter(
+                    FocusSession.user_id == current_user.id,
+                    FocusSession.status == "completed",
+                    FocusSession.ended_at.isnot(None),
+                    FocusSession.ended_at >= recent_cutoff,
+                )
+                .order_by(FocusSession.ended_at.desc())
+                .first()
             )
-            total_duration = (end_time - started_at).total_seconds()
-            elapsed_seconds = int(total_duration - active_session.total_paused_seconds)
 
-            # Get the lesson if associated
+        if current_session:
+            elapsed_seconds = _calculate_elapsed_seconds(current_session)
+
             lesson = None
-            if active_session.lesson_id:
+            if current_session.lesson_id:
                 lesson = (
                     session.query(Lesson)
-                    .filter(Lesson.id == active_session.lesson_id)
+                    .filter(Lesson.id == current_session.lesson_id)
                     .first()
                 )
 
@@ -790,16 +750,20 @@ def get_now(
 
             return {
                 "type": "focus",
-                "session_id": active_session.id,
-                "status": active_session.status,  # active or paused
-                "lesson_id": active_session.lesson_id,
+                "session_id": current_session.id,
+                "status": current_session.status,
+                "lesson_id": current_session.lesson_id,
                 "lesson_subject": lesson_subject,
                 "lesson_description": lesson_description,
-                "goal_text": active_session.goal_text,
-                "started_at": active_session.started_at,
+                "goal_text": current_session.goal_text,
+                "started_at": current_session.started_at,
+                "ended_at": current_session.ended_at,  # ← обязательно
                 "elapsed_seconds": elapsed_seconds,
-                # We don't return xp_preview here because it depends on completion mode and verification.
-                # The frontend can show a generic "Начать" or "Пауза"/"Продолжить"/"Завершить" buttons.
+                "duration_seconds": current_session.duration_seconds,  # ← обязательно
+                "completion_mode": current_session.completion_mode,  # ← обязательно
+                "verification_status": current_session.verification_status,  # ← вот это
+                "xp_awarded": current_session.xp_awarded,  # ← и это
+                "evidence_provided": bool(current_session.evidence_provided),
             }
 
         # No active focus session, check for the current visible lesson
@@ -1586,13 +1550,15 @@ async def start_background_tasks():
 
 # Catch-all route for serving frontend (if exists)
 @app.get("/{full_path:path}")
-async def serve_frontend(full_path: str):
-    """Serve frontend."""
-    if frontend_dir.is_dir():
-        requested_file = frontend_dir / full_path
-        if requested_file.is_file():
-            return FileResponse(requested_file)
-        index_file = frontend_dir / "index.html"
-        if index_file.is_file():
-            return FileResponse(index_file)
-    raise HTTPException(status_code=404, detail="Frontend not found")
+async def spa_fallback(full_path: str):
+    # Не перехватываем API-пути
+    if full_path.startswith("api/") or full_path == "api":
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # Если запрошен реальный файл — отдаём его
+    file_path = frontend_dir / full_path
+    if file_path.is_file():
+        return FileResponse(file_path)
+
+    # Иначе — SPA-роут
+    return FileResponse(frontend_dir / "index.html")

@@ -502,8 +502,19 @@ class FocusSession(Base):
         nullable=False,
         default="not_required",
     )  # not_required, pending, approved, partial, rejected, error
+
+    verification_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    verification_missing: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )  # JSON-строка
     xp_awarded: Mapped[int] = mapped_column(Integer, default=0)
-    evidence_provided: Mapped[bool] = mapped_column(Integer, default=0)  # using Integer for boolean compatibility with SQLite
+    evidence_provided: Mapped[bool] = mapped_column(
+        Integer, default=0
+    )  # using Integer for boolean compatibility with SQLite
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=datetime.now(timezone.utc),
@@ -535,9 +546,15 @@ class FocusEvidence(Base):
     type: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-    )  # text, url, image, file
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    file_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    )  # text, url, image
+    content: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+    file_path: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=datetime.now(timezone.utc),

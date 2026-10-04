@@ -56,7 +56,6 @@ export const focusAPI = {
       },
       body: JSON.stringify({
         completion_mode: completionMode,
-        evidence: evidence,
       }),
     });
     if (!response.ok) {
@@ -88,17 +87,54 @@ export const focusAPI = {
   },
 
   addEvidence: async (sessionId, evidence) => {
-    const response = await fetch(`${API_BASE}/api/focus/${sessionId}/evidence`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(evidence),
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to add evidence: ${response.status}`);
+    if (!evidence || !evidence.type) {
+      throw new Error('Evidence type is required');
     }
+
+    const formData = new FormData();
+    formData.append('type', evidence.type);
+
+    if (evidence.type === 'image') {
+      if (!(evidence.file instanceof File)) {
+        throw new Error('Image evidence requires a File object');
+      }
+      formData.append('file', evidence.file);
+      if (evidence.content) {
+        formData.append('content', evidence.content);
+      }
+    } else if (evidence.type === 'text' || evidence.type === 'url') {
+      if (!evidence.content) {
+        throw new Error(`${evidence.type} evidence requires content`);
+      }
+      formData.append('content', evidence.content);
+    } else {
+      throw new Error(`Unsupported evidence type: ${evidence.type}`);
+    }
+
+    const response = await fetch(
+      `${API_BASE}/api/focus/${sessionId}/evidence`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        // ВАЖНО: Content-Type не выставляем — браузер сам поставит
+        // multipart/form-data с корректным boundary.
+        body: formData,
+      }
+    );
+
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const err = await response.json();
+        if (err && err.detail) {
+          detail = `: ${err.detail}`;
+        }
+      } catch {
+        // тело не JSON — игнорируем
+      }
+      throw new Error(`Failed to add evidence (${response.status})${detail}`);
+    }
+
     return await response.json();
   },
 };

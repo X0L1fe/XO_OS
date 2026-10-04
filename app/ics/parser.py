@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 
 from icalendar import Calendar
 
-
 MAI_TIMEZONE = ZoneInfo("Europe/Moscow")
 
 
@@ -87,9 +86,7 @@ class LessonData:
             ]
         )
 
-        return hashlib.sha256(
-            raw.encode("utf-8")
-        ).hexdigest()
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _text(value: Any) -> str:
@@ -142,16 +139,12 @@ def _parse_datetime(value: Any) -> datetime:
     Поэтому интерпретируем её как Europe/Moscow.
     """
     if value is None:
-        raise ValueError(
-            "VEVENT does not contain required datetime field"
-        )
+        raise ValueError("VEVENT does not contain required datetime field")
 
     dt = value.dt
 
     if not isinstance(dt, datetime):
-        raise ValueError(
-            "Only datetime DTSTART/DTEND are supported"
-        )
+        raise ValueError("Only datetime DTSTART/DTEND are supported")
 
     if dt.tzinfo is None:
         return dt.replace(tzinfo=MAI_TIMEZONE)
@@ -205,11 +198,7 @@ def _parse_description(
         teacher = _clean(match.group("teacher"))
 
         if teacher:
-            teachers.extend(
-                part.strip()
-                for part in teacher.split(",")
-                if part.strip()
-            )
+            teachers.extend(part.strip() for part in teacher.split(",") if part.strip())
 
     # Составной формат:
     #
@@ -221,23 +210,13 @@ def _parse_description(
         description,
         flags=re.IGNORECASE,
     ):
-        lesson_types.append(
-            LESSON_TYPE_MAP[
-                match.group(1).upper()
-            ]
-        )
+        lesson_types.append(LESSON_TYPE_MAP[match.group(1).upper()])
 
     # Первый найденный тип считаем основным.
-    lesson_type = (
-        lesson_types[0]
-        if lesson_types
-        else "OTHER"
-    )
+    lesson_type = lesson_types[0] if lesson_types else "OTHER"
 
     # Убираем дубликаты, сохраняя порядок.
-    unique_teachers = tuple(
-        dict.fromkeys(teachers)
-    )
+    unique_teachers = tuple(dict.fromkeys(teachers))
 
     return lesson_type, unique_teachers
 
@@ -255,10 +234,7 @@ def _detect_category(
     """
     text = f"{subject} {description}".casefold()
 
-    if (
-        "военная подготовка" in text
-        or "военная кафедра" in text
-    ):
+    if "военная подготовка" in text or "военная кафедра" in text:
         return "MILITARY"
 
     if "электив" in subject.casefold():
@@ -303,9 +279,7 @@ def _build_identity_key(
         ]
     )
 
-    return hashlib.sha256(
-        raw.encode("utf-8")
-    ).hexdigest()[:32]
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def _serialize_component(component: Any) -> str:
@@ -341,43 +315,22 @@ def parse_ics(
     result: list[LessonData] = []
 
     for component in calendar.walk("VEVENT"):
-        uid = _clean(
-            _text(component.get("UID"))
-        )
+        uid = _clean(_text(component.get("UID")))
 
-        subject = (
-            _clean(
-                _text(component.get("SUMMARY"))
-            )
-            or "Без названия"
-        )
+        subject = _clean(_text(component.get("SUMMARY"))) or "Без названия"
 
-        description = _clean(
-            _text(component.get("DESCRIPTION"))
-        )
+        description = _clean(_text(component.get("DESCRIPTION")))
 
-        room = _clean(
-            _text(component.get("LOCATION"))
-        )
+        room = _clean(_text(component.get("LOCATION")))
 
-        start_time = _parse_datetime(
-            component.get("DTSTART")
-        )
+        start_time = _parse_datetime(component.get("DTSTART"))
 
-        end_time = _parse_datetime(
-            component.get("DTEND")
-        )
+        end_time = _parse_datetime(component.get("DTEND"))
 
         if end_time <= start_time:
-            raise ValueError(
-                f"Invalid lesson interval: {subject!r}"
-            )
+            raise ValueError(f"Invalid lesson interval: {subject!r}")
 
-        lesson_type, teachers = (
-            _parse_description(
-                description or ""
-            )
-        )
+        lesson_type, teachers = _parse_description(description or "")
 
         category = _detect_category(
             subject,
@@ -386,10 +339,7 @@ def parse_ics(
 
         # Для текущего профиля военная подготовка
         # вообще не должна попадать в систему.
-        if (
-            category == "MILITARY"
-            and not include_military
-        ):
+        if category == "MILITARY" and not include_military:
             continue
 
         identity_key = _build_identity_key(
@@ -402,27 +352,16 @@ def parse_ics(
             LessonData(
                 source_uid=uid,
                 identity_key=identity_key,
-
                 subject=subject,
                 lesson_type=lesson_type,
                 category=category,
-
                 start_time=start_time,
                 end_time=end_time,
-
-                teacher=(
-                    teachers[0]
-                    if teachers
-                    else None
-                ),
+                teacher=(teachers[0] if teachers else None),
                 teachers=teachers,
-
                 room=room,
                 description=description,
-
-                raw_ics=_serialize_component(
-                    component
-                ),
+                raw_ics=_serialize_component(component),
             )
         )
 

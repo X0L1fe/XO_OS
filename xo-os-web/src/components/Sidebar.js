@@ -105,32 +105,57 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
   useEffect(() => {
     if (!user) return;
 
-    fetch("/api/stats", { credentials: "include" })
-      .then((res) => res.json())
-      .then((data) => {
-        const { level, total_xp } = data || {};
-        if (level !== undefined && total_xp !== undefined) {
-          const safeLevel = Number.isFinite(level) ? level : 0;
-          const safeXp = Number.isFinite(total_xp) ? total_xp : 0;
+    const loadStats = () => {
+      fetch("/api/gamification/", { credentials: "include" })
+        .then((res) => {
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          return res.json();
+        })
+        .then((data) => {
+          if (!data) return;
+
+          const safeLevel = Number.isFinite(data.level) ? data.level : 1;
+          const safeXp = Number.isFinite(data.total_xp) ? data.total_xp : 0;
+          const safeXpToNext = Number.isFinite(data.xp_remaining)
+            ? data.xp_remaining
+            : Math.max(0, safeLevel * 1000 - safeXp);
+
           setPlayerStats({
             level: safeLevel,
             xp: safeXp,
-            xpToNext: Math.max(500, (safeLevel + 1) * 1000 - safeXp),
+            xpToNext: safeXpToNext,
           });
-        }
-      })
-      .catch((err) => {
-        console.warn("Failed to fetch player stats for sidebar:", err);
-        if (user.level !== undefined) {
-          const safeLevel = Number.isFinite(user.level) ? user.level : 0;
-          const safeXp = Number.isFinite(user.xp) ? user.xp : 0;
-          setPlayerStats({
-            level: safeLevel,
-            xp: safeXp,
-            xpToNext: Math.max(500, (safeLevel + 1) * 1000 - safeXp),
-          });
-        }
-      });
+        })
+        .catch((err) => {
+          console.warn("Failed to fetch player stats for sidebar:", err);
+          if (user.level !== undefined) {
+            const safeLevel = Number.isFinite(user.level) ? user.level : 1;
+            const safeXp = Number.isFinite(user.xp) ? user.xp : 0;
+            setPlayerStats({
+              level: safeLevel,
+              xp: safeXp,
+              xpToNext: Math.max(0, safeLevel * 1000 - safeXp),
+            });
+          }
+        });
+    };
+
+    loadStats();
+
+    const onGamificationUpdated = () => loadStats();
+    window.addEventListener(
+      "xo-os:gamification-updated",
+      onGamificationUpdated
+    );
+
+    return () => {
+      window.removeEventListener(
+        "xo-os:gamification-updated",
+        onGamificationUpdated
+      );
+    };
   }, [user]);
 
   const xpTotal = (playerStats.xp || 0) + (playerStats.xpToNext || 0);
@@ -175,10 +200,9 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
           items-center
           transition-all
           duration-300
-          ${
-            collapsed
-              ? "justify-center px-2 py-5"
-              : "justify-start px-5 py-5"
+          ${collapsed
+            ? "justify-center px-2 py-5"
+            : "justify-start px-5 py-5"
           }
         `}
       >
@@ -196,10 +220,9 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
             whitespace-nowrap
             transition-all
             duration-200
-            ${
-              collapsed
-                ? "opacity-0 w-0 ml-0"
-                : "opacity-100 w-auto"
+            ${collapsed
+              ? "opacity-0 w-0 ml-0"
+              : "opacity-100 w-auto"
             }
           `}
         >
@@ -215,10 +238,9 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
           overflow-hidden
           transition-all
           duration-300
-          ${
-            collapsed
-              ? "max-h-0 opacity-0 mb-0"
-              : "max-h-40 opacity-100 mb-2"
+          ${collapsed
+            ? "max-h-0 opacity-0 mb-0"
+            : "max-h-40 opacity-100 mb-2"
           }
         `}
       >
@@ -255,9 +277,8 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
             {[...Array(10)].map((_, i) => (
               <span
                 key={i}
-                className={`w-3 h-3 rounded transition-colors duration-300 ${
-                  i < blocksFilled ? "bg-accent-blue" : "bg-accent-blue/20"
-                }`}
+                className={`w-3 h-3 rounded transition-colors duration-300 ${i < blocksFilled ? "bg-accent-blue" : "bg-accent-blue/20"
+                  }`}
               />
             ))}
           </div>
@@ -275,10 +296,9 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
           whitespace-nowrap
           transition-all
           duration-300
-          ${
-            collapsed
-              ? "max-h-0 opacity-0 mb-0"
-              : "max-h-10 opacity-100 mb-5"
+          ${collapsed
+            ? "max-h-0 opacity-0 mb-0"
+            : "max-h-10 opacity-100 mb-5"
           }
         `}
       >
@@ -302,10 +322,9 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
                 rounded-lg
                 transition-colors
                 duration-200
-                ${
-                  isActive
-                    ? "font-bold text-text-primary bg-accent-blue/20 border-l-4 border-accent-blue_bright"
-                    : "text-text-primary hover:bg-accent-blue/10"
+                ${isActive
+                  ? "font-bold text-text-primary bg-accent-blue/20 border-l-4 border-accent-blue_bright"
+                  : "text-text-primary hover:bg-accent-blue/10"
                 }
               `}
               title={collapsed ? label : undefined}
@@ -317,20 +336,18 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
                   flex-shrink-0
                   transition-all
                   duration-300
-                  ${
-                    collapsed
-                      ? "justify-center w-full"
-                      : "justify-start w-full px-2"
+                  ${collapsed
+                    ? "justify-center w-full"
+                    : "justify-start w-full px-2"
                   }
                 `}
               >
                 <Icon
                   className={`
                     h-5 w-5 flex-shrink-0
-                    ${
-                      isActive
-                        ? "text-accent-blue_bright"
-                        : "text-text-secondary"
+                    ${isActive
+                      ? "text-accent-blue_bright"
+                      : "text-text-secondary"
                     }
                     transition-colors
                     duration-200
@@ -344,10 +361,9 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
                     overflow-hidden
                     transition-all
                     duration-200
-                    ${
-                      collapsed
-                        ? "opacity-0 w-0 ml-0"
-                        : "opacity-100 w-auto"
+                    ${collapsed
+                      ? "opacity-0 w-0 ml-0"
+                      : "opacity-100 w-auto"
                     }
                   `}
                 >
@@ -368,10 +384,9 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
           overflow-hidden
           transition-all
           duration-300
-          ${
-            collapsed
-              ? "opacity-0 max-h-0 px-0"
-              : "opacity-100 max-h-52"
+          ${collapsed
+            ? "opacity-0 max-h-0 px-0"
+            : "opacity-100 max-h-52"
           }
         `}
       >
@@ -381,11 +396,10 @@ const Sidebar = ({ onSelect, activeSection, user }) => {
 
         <div className="flex items-center">
           <span
-            className={`w-2 h-2 rounded-full mr-2 ${
-              syncStatus === "Синхронизировано"
+            className={`w-2 h-2 rounded-full mr-2 ${syncStatus === "Синхронизировано"
                 ? "bg-accent-green"
                 : "bg-red-500"
-            }`}
+              }`}
           />
 
           <span className="text-xs text-text-secondary">

@@ -1,60 +1,49 @@
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional, Tuple
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Tuple
 
-from app.database.models import User, UserStats, Lesson, ScheduleExclusion
 from app.auth.service import get_current_active_user
 from app.database.db import db
+from app.database.models import Lesson, ScheduleExclusion, User, UserStats
+
 from .service import (
-    normalize_schedule_value,
-    normalize_schedule_category,
-    get_schedule_exclusions,
-    lesson_is_visible,
-    get_semester_bounds,
     _as_aware_utc,
-    lesson_duration_hours,
     clipped_lesson_duration_hours,
     get_filtered_semester_lessons,
+    get_schedule_exclusions,
+    get_semester_bounds,
+    lesson_duration_hours,
+    lesson_is_visible,
+    normalize_schedule_category,
+    normalize_schedule_value,
 )
 
 router = APIRouter()
+MAI_TZ = ZoneInfo("Europe/Moscow")
 
 
-@router.get("/")
-def get_stats(current_user: User = Depends(get_current_active_user)):
-    """Get stats for the current user."""
-    with db.session() as session:
-        stats = (
-            session.query(UserStats)
-            .filter(UserStats.user_id == current_user.id)
-            .first()
-        )
-        if not stats:
-            # Should not happen if we create stats for each user, but just in case
-            stats = UserStats(user_id=current_user.id)
-            session.add(stats)
-            session.commit()
-        return {
-            "level": stats.level,
-            "total_xp": stats.total_xp,
-            "current_streak": stats.current_streak,
-            "max_streak": stats.max_streak,
-            "last_activity_date": stats.last_activity_date.isoformat()
-            if stats.last_activity_date
-            else None,
-        }
+def now_msk_naive() -> datetime:
+    """
+    Текущее время в Europe/Moscow без tzinfo.
+
+    Совпадает с представлением Lesson.start_time / Lesson.end_time в БД
+    (naive MSK), чтобы сравнения работали.
+    """
+    return datetime.now(MAI_TZ).replace(tzinfo=None)
 
 
 @router.get("/semester")
 def get_semester_stats(current_user: User = Depends(get_current_active_user)):
     """
-    Semester workload in actual hours.
+    Загрузка семестра в фактических часах.
 
-    Filters are applied before calculation.
+    Фильтры применяются перед расчетом.
     """
 
-    now = datetime.now(timezone.utc)
+    now = now_msk_naive()
 
     with db.session() as session:
         result = get_filtered_semester_lessons(
@@ -126,10 +115,10 @@ def get_semester_stats(current_user: User = Depends(get_current_active_user)):
 @router.get("/weekly")
 def get_weekly_stats(current_user: User = Depends(get_current_active_user)):
     """
-    Workload by every week of the current semester.
+    Загруженность по каждой неделе текущего семестра.
 
-    Future weeks are returned with 0 hours so the frontend
-    can display the complete semester timeline.
+    Будущие недели возвращаются с 0 часами, поэтому интерфейс
+    может отображать полную шкалу семестра.
     """
 
     now = datetime.now(timezone.utc)
@@ -198,12 +187,12 @@ def get_weekly_stats(current_user: User = Depends(get_current_active_user)):
 @router.get("/topsubjects")
 def get_top_subjects(current_user: User = Depends(get_current_active_user)):
     """
-    Top subjects by actual semester workload.
+    Лучшие предметы по фактической учебной нагрузке в семестре.
 
-    Filters are applied before aggregation.
+    Фильтры применяются перед агрегацией.
     """
 
-    now = datetime.now(timezone.utc)
+    now = now_msk_naive()
 
     with db.session() as session:
         result = get_filtered_semester_lessons(
@@ -257,18 +246,18 @@ def get_top_subjects(current_user: User = Depends(get_current_active_user)):
 @router.get("/planfact")
 def get_plan_fact(current_user: User = Depends(get_current_active_user)):
     """
-    Semester progress.
+    Ход семестра.
 
-    The old endpoint returned zero placeholders.
-    We now expose actual elapsed and remaining scheduled
-    workload after applying filters.
+    Старая конечная точка не возвращала заполнителей.
+    Теперь мы отображаем фактические истекшие и оставшиеся запланированные
+    нагрузка после применения фильтров.
 
-    completed = portion of scheduled lesson hours that has
-                already passed.
-    remaining = portion still ahead.
+    завершено = часть запланированных часов урока, которая была
+                уже прошло.
+    осталось = часть еще впереди.
     """
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(MAI_TZ).replace(tzinfo=None)
 
     with db.session() as session:
         result = get_filtered_semester_lessons(

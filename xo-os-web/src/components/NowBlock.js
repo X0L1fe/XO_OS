@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   FiBookOpen,
   FiClock,
@@ -9,13 +9,14 @@ import {
   FiZap,
   FiX,
   FiCheckCircle,
-  FiAlertTriangle,
+  FiPlus,
+  FiFileText,
+  FiLink,
+  FiImage,
 } from "react-icons/fi";
 
-const FILTER_EVENT_NAME =
-  "xo-os:schedule-filters-changed";
-const GAMIFICATION_UPDATE_EVENT_NAME =
-  "xo-os:gamification-updated";
+const FILTER_EVENT_NAME = "xo-os:schedule-filters-changed";
+const GAMIFICATION_UPDATE_EVENT_NAME = "xo-os:gamification-updated";
 
 const EMPTY_NOW = {
   taskTitle: "",
@@ -25,18 +26,83 @@ const EMPTY_NOW = {
   xpReward: 0,
   time: "--:--",
   category: "",
+  type: "idle",
+
+  session_id: null,
+  status: null,
+  elapsed_seconds: 0,
+  lesson_id: null,
+  lesson_subject: "",
+  lesson_description: "",
+  goal_text: "",
+  verification_status: null,
+  completion_mode: null,
+  xp_awarded: 0,
+  ended_at: null,
+  duration_seconds: null,
+  evidence_provided: false,
 };
 
 export default function NowBlock() {
   const [now, setNow] = useState(EMPTY_NOW);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [currentTime, setCurrentTime] = useState(
-    formatCurrentTime()
-  );
-  // State for showing a temporary completion message
+
+  const [currentTime, setCurrentTime] = useState(formatCurrentTime());
+
   const [completionMessage, setCompletionMessage] = useState(null);
-  const [completionMessageType, setCompletionMessageType] = useState(''); // 'success' or 'error'
+  const [completionMessageType, setCompletionMessageType] = useState("");
+
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+
+  /*
+   * completionMode intentionally lives separately from the request.
+   * We pass the selected mode directly to submitCompletion()
+   * instead of relying on an asynchronous setState().
+   */
+  const [completionMode, setCompletionMode] = useState(null);
+
+  const [evidence, setEvidence] = useState([]);
+
+  /*
+   * Local timer state.
+   *
+   * elapsedSeconds is what the user sees.
+   * timerStartedAtRef is used only while the session is running.
+   * timerBaseSecondsRef stores the last backend-confirmed elapsed time.
+   */
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  const timerStartedAtRef = useRef(null);
+  const timerBaseSecondsRef = useRef(0);
+
+  /*
+   * Prevents polling from visually jumping the timer backwards
+   * while a local session transition is still being processed.
+   */
+  const transitionRef = useRef(false);
+
+  /*
+   * Prevent double-clicks on controls.
+   */
+  const actionInProgressRef = useRef(false);
+
+  const hasTask = Boolean(now.taskTitle) || now.type === "focus";
+
+  const isFocusActive =
+    now.type === "focus" && now.status === "active";
+
+  const isFocusPaused =
+    now.type === "focus" && now.status === "paused";
+
+  const isFocusCompleted =
+    now.type === "focus" && now.status === "completed";
+
+  /*
+   * ------------------------------------------------------------------
+   * NOW API
+   * ------------------------------------------------------------------
+   */
 
   const loadNow = useCallback(
     async (showRefreshing = false) => {
@@ -56,45 +122,104 @@ export default function NowBlock() {
 
         const data = await response.json();
 
-        setNow({
+        const nextNow = {
           ...EMPTY_NOW,
           ...data,
-        });
-        // Clear any completion message when we get new data (unless we are showing a completion message that we want to keep for a bit)
-        // We'll handle the completion message separately with a timeout.
-      } catch (error) {
-        console.error(
-          "Failed to fetch current lesson:",
-          error
-        );
+        };
 
-        setNow(EMPTY_NOW);
+        setNow(nextNow);
+
+        /*
+         * Do not let a polling response overwrite the timer while
+         * a pause/resume/complete request is being processed.
+         */
+        if (!transitionRef.current) {
+          const backendElapsed = Number(
+            nextNow.elapsed_seconds || 0
+          );
+
+          /*
+           * Backend может быть немного позади локального отображения,
+           * поэтому не сбрасываем работающий timer назад.
+           */
+          if (
+            nextNow.type === "focus" &&
+            nextNow.status === "active"
+          ) {
+            const localElapsed = elapsedSeconds;
+
+            if (backendElapsed >= localElapsed) {
+              timerBaseSecondsRef.current = backendElapsed;
+              setElapsedSeconds(backendElapsed);
+              timerStartedAtRef.current = Date.now();
+            }
+          } else if (
+            nextNow.type === "focus" &&
+            (
+              nextNow.status === "paused" ||
+              nextNow.status === "completed"
+            )
+          ) {
+            timerBaseSecondsRef.current = backendElapsed;
+            timerStartedAtRef.current = null;
+            setElapsedSeconds(backendElapsed);
+          } else {
+            timerBaseSecondsRef.current = 0;
+            timerStartedAtRef.current = null;
+            setElapsedSeconds(0);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch current lesson:", error);
+
+        /*
+         * Don't destroy an active local session just because one
+         * polling request failed.
+         */
+        if (!now.session_id) {
+          setNow(EMPTY_NOW);
+          setElapsedSeconds(0);
+          timerStartedAtRef.current = null;
+        }
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
     },
-    []
+    [now.session_id]
   );
 
   /*
-   * Initial load + automatic refresh.
+   * Initial load.
    */
   useEffect(() => {
     loadNow();
+  }, [loadNow]);
+
+  /*
+   * Normal polling.
+   *
+   * 5 seconds while a focus session exists,
+   * 15 seconds otherwise.
+   */
+  useEffect(() => {
+    const intervalMs = now.type === "focus" ? 5000 : 15000;
 
     const interval = window.setInterval(() => {
       loadNow(true);
-    }, 15000);
+    }, intervalMs);
 
     return () => {
       window.clearInterval(interval);
     };
-  }, [loadNow]);
+  }, [loadNow, now.type]);
 
   /*
-   * Live clock.
+   * ------------------------------------------------------------------
+   * LIVE CLOCK
+   * ------------------------------------------------------------------
    */
+
   useEffect(() => {
     const updateClock = () => {
       setCurrentTime(formatCurrentTime());
@@ -102,10 +227,7 @@ export default function NowBlock() {
 
     updateClock();
 
-    const interval = window.setInterval(
-      updateClock,
-      1000
-    );
+    const interval = window.setInterval(updateClock, 1000);
 
     return () => {
       window.clearInterval(interval);
@@ -113,83 +235,190 @@ export default function NowBlock() {
   }, []);
 
   /*
-   * Listen to Server-Sent Events for real-time updates
-   * When we receive events, we dispatch the corresponding window events
-   * so that the existing event listeners continue to work.
+   * ------------------------------------------------------------------
+   * TIMER
+   * ------------------------------------------------------------------
+   *
+   * There is exactly ONE timer interval.
+   *
+   * Active:
+   *   displayed = backend base + seconds since local start
+   *
+   * Paused/completed:
+   *   displayed = frozen backend value
+   */
+
+  useEffect(() => {
+    if (!isFocusActive) {
+      timerStartedAtRef.current = null;
+      return;
+    }
+
+    /*
+     * Start/restart local timer from the current displayed value.
+     */
+    if (!timerStartedAtRef.current) {
+      timerStartedAtRef.current = Date.now();
+    }
+
+    const interval = window.setInterval(() => {
+      if (!timerStartedAtRef.current) {
+        return;
+      }
+
+      const secondsSinceStart = Math.floor(
+        (Date.now() - timerStartedAtRef.current) / 1000
+      );
+
+      setElapsedSeconds(
+        timerBaseSecondsRef.current + secondsSinceStart
+      );
+    }, 250);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isFocusActive]);
+
+  /*
+   * Whenever backend sends a new focus state, synchronize the
+   * local timer — unless we're in the middle of a button action.
    */
   useEffect(() => {
-    // Connect to the SSE endpoint
+    if (transitionRef.current) {
+      return;
+    }
+
+    if (now.type !== "focus") {
+      timerBaseSecondsRef.current = 0;
+      timerStartedAtRef.current = null;
+      setElapsedSeconds(0);
+      return;
+    }
+
+    const backendElapsed = Number(now.elapsed_seconds || 0);
+
+    timerBaseSecondsRef.current = backendElapsed;
+
+    if (now.status === "active") {
+      /*
+       * Only initialize the local clock if it isn't already running.
+       * This prevents the 5-second polling from constantly resetting
+       * the timer.
+       */
+      if (!timerStartedAtRef.current) {
+        timerStartedAtRef.current = Date.now();
+      }
+    } else {
+      timerStartedAtRef.current = null;
+      setElapsedSeconds(backendElapsed);
+    }
+  }, [
+    now.type,
+    now.status,
+    now.elapsed_seconds,
+  ]);
+
+  /*
+   * ------------------------------------------------------------------
+   * SSE
+   * ------------------------------------------------------------------
+   */
+
+  useEffect(() => {
     const eventSource = new EventSource("/api/events");
 
-    // Handle focus updated events
-    eventSource.addEventListener("xo-os:focus-updated", (event) => {
-      // Dispatch the custom event for backward compatibility
-      window.dispatchEvent(new CustomEvent("xo-os:focus-updated"));
-      // Reload the now block to get updated focus session data
-      loadNow(true);
-    });
+    eventSource.onmessage = (event) => {
+      let payload;
+      try {
+        payload = JSON.parse(event.data);
+      } catch {
+        return; // heartbeat / connected могут быть не JSON или в другом формате
+      }
 
-    // Handle gamification updated events
-    eventSource.addEventListener("xo-os:gamification-updated", (event) => {
-      // Dispatch the custom event for backward compatibility
-      window.dispatchEvent(new CustomEvent("xo-os:gamification-updated"));
-    });
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
 
-    // Handle connection errors
+      if (payload.type === "xo-os:focus-updated") {
+        window.dispatchEvent(new CustomEvent("xo-os:focus-updated"));
+        loadNow(true);
+      } else if (payload.type === "xo-os:gamification-updated") {
+        window.dispatchEvent(
+          new CustomEvent(GAMIFICATION_UPDATE_EVENT_NAME)
+        );
+      }
+    };
+
     eventSource.onerror = (error) => {
       console.error("SSE Error:", error);
       eventSource.close();
     };
 
-    // Clean up the event source when the component unmounts
     return () => {
       eventSource.close();
     };
   }, [loadNow]);
 
   /*
-   * Handle completion message timeout
+   * ------------------------------------------------------------------
+   * COMPLETION MESSAGE
+   * ------------------------------------------------------------------
    */
-  useEffect(() => {
-    if (completionMessage) {
-      const timeout = setTimeout(() => {
-        setCompletionMessage(null);
-        setCompletionMessageType('');
-      }, 3000); // 3 seconds
 
-      return () => {
-        clearTimeout(timeout);
-      };
+  useEffect(() => {
+    if (!completionMessage) {
+      return;
     }
+
+    const timeout = window.setTimeout(() => {
+      setCompletionMessage(null);
+      setCompletionMessageType("");
+    }, 4000);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
   }, [completionMessage]);
 
-  const hasTask = Boolean(now.taskTitle) || now.type === 'focus';
+  /*
+   * ------------------------------------------------------------------
+   * ACTION HELPERS
+   * ------------------------------------------------------------------
+   */
 
-  // Determine if we are in a focus session that is active or paused
-  const isFocusActive = now.type === 'focus' && now.status === 'active';
-  const isFocusPaused = now.type === 'focus' && now.status === 'paused';
-  const isFocusCompleted = now.type === 'focus' && now.status === 'completed';
-
-  // Format the elapsed time for display
-  const formatElapsedTime = (seconds) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    const parts = [];
-    if (hours > 0) {
-      parts.push(String(hours).padStart(2, '0'));
+  const beginAction = () => {
+    if (actionInProgressRef.current) {
+      return false;
     }
-    parts.push(String(minutes).padStart(2, '0'));
-    parts.push(String(secs).padStart(2, '0'));
-    return parts.join(':');
+
+    actionInProgressRef.current = true;
+    return true;
   };
 
-  // Start a focus session
+  const endAction = () => {
+    actionInProgressRef.current = false;
+  };
+
+  const showError = (message) => {
+    setCompletionMessage(message);
+    setCompletionMessageType("error");
+  };
+
+  /*
+   * ------------------------------------------------------------------
+   * START
+   * ------------------------------------------------------------------
+   */
+
   const handleStartFocus = async () => {
+    if (!beginAction()) {
+      return;
+    }
+
     try {
       setLoading(true);
-      // We don't have the lesson_id or goal_text from the now block, but the backend will determine the current lesson.
-      // We'll just call the start endpoint without parameters.
+
       const response = await fetch("/api/focus/start", {
         method: "POST",
         credentials: "include",
@@ -203,23 +432,96 @@ export default function NowBlock() {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      // The response will contain the session data, but we will update via polling.
+      const data = await response.json();
+
+      /*
+       * Если backend возвращает session state —
+       * используем его напрямую.
+       */
+      if (data && typeof data === "object") {
+        const nextNow = {
+          ...EMPTY_NOW,
+          ...data,
+        };
+
+        setNow(nextNow);
+
+        const elapsed = Number(
+          nextNow.elapsed_seconds || 0
+        );
+
+        timerBaseSecondsRef.current = elapsed;
+        setElapsedSeconds(elapsed);
+
+        if (
+          nextNow.type === "focus" &&
+          nextNow.status === "active"
+        ) {
+          timerStartedAtRef.current = Date.now();
+        } else {
+          timerStartedAtRef.current = null;
+        }
+      }
+
+      /*
+       * В любом случае синхронизируемся с /api/now.
+       */
+      await loadNow();
     } catch (error) {
-      console.error("Failed to start focus session:", error);
-      setCompletionMessage("Не удалось начать фокус-сессию");
-      setCompletionMessageType('error');
+      console.error(
+        "Failed to start focus session:",
+        error
+      );
+
+      showError("Не удалось начать фокус-сессию");
     } finally {
       setLoading(false);
+      endAction();
     }
   };
 
-  // Pause the focus session
+  /*
+   * ------------------------------------------------------------------
+   * PAUSE
+   * ------------------------------------------------------------------
+   */
+
   const handlePauseFocus = async () => {
-    if (!now.session_id) return;
+    if (!now.session_id || !isFocusActive) {
+      return;
+    }
+
+    if (!beginAction()) {
+      return;
+    }
+
+    const sessionId = now.session_id;
+    const frozenElapsed = elapsedSeconds;
+
+    /*
+     * Сначала останавливаем локальный timer.
+     */
+    transitionRef.current = true;
+
+    timerBaseSecondsRef.current = frozenElapsed;
+    timerStartedAtRef.current = null;
+    setElapsedSeconds(frozenElapsed);
+
+    /*
+     * И сразу показываем PAUSED локально.
+     * Не ждём polling.
+     */
+    setNow((previous) => ({
+      ...previous,
+      status: "paused",
+      elapsed_seconds: frozenElapsed,
+    }));
+
     try {
       setLoading(true);
+
       const response = await fetch(
-        `/api/focus/${now.session_id}/pause`,
+        `/api/focus/${sessionId}/pause`,
         {
           method: "POST",
           credentials: "include",
@@ -229,23 +531,65 @@ export default function NowBlock() {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      // Update via polling
+
+      /*
+       * ВАЖНО:
+       * после pause не вызываем loadNow() здесь.
+       *
+       * Backend уже получил pause.
+       * Следующий обычный polling сам синхронизирует состояние.
+       */
     } catch (error) {
-      console.error("Failed to pause focus session:", error);
-      setCompletionMessage("Не удалось поставить на паузу");
-      setCompletionMessageType('error');
+      console.error(
+        "Failed to pause focus session:",
+        error
+      );
+
+      /*
+       * Если API отклонил pause — возвращаем ACTIVE.
+       */
+      setNow((previous) => ({
+        ...previous,
+        status: "active",
+        elapsed_seconds: frozenElapsed,
+      }));
+
+      timerBaseSecondsRef.current = frozenElapsed;
+      timerStartedAtRef.current = Date.now();
+
+      showError("Не удалось поставить на паузу");
     } finally {
+      transitionRef.current = false;
       setLoading(false);
+      endAction();
     }
   };
 
-  // Resume the focus session
+  /*
+   * ------------------------------------------------------------------
+   * RESUME
+   * ------------------------------------------------------------------
+   */
+
   const handleResumeFocus = async () => {
-    if (!now.session_id) return;
+    if (!now.session_id || !isFocusPaused) {
+      return;
+    }
+
+    if (!beginAction()) {
+      return;
+    }
+
+    const sessionId = now.session_id;
+    const frozenElapsed = elapsedSeconds;
+
+    transitionRef.current = true;
+
     try {
       setLoading(true);
+
       const response = await fetch(
-        `/api/focus/${now.session_id}/resume`,
+        `/api/focus/${sessionId}/resume`,
         {
           method: "POST",
           credentials: "include",
@@ -255,41 +599,111 @@ export default function NowBlock() {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      // Update via polling
+
+      /*
+       * Сразу переводим существующую сессию в ACTIVE.
+       * session_id остаётся тем же.
+       */
+      setNow((previous) => ({
+        ...previous,
+        status: "active",
+        elapsed_seconds: frozenElapsed,
+      }));
+
+      timerBaseSecondsRef.current = frozenElapsed;
+      setElapsedSeconds(frozenElapsed);
+
+      /*
+       * Таймер начинает продолжать именно с frozenElapsed,
+       * а не с нуля.
+       */
+      timerStartedAtRef.current = Date.now();
     } catch (error) {
-      console.error("Failed to resume focus session:", error);
-      setCompletionMessage("Не удалось продолжить");
-      setCompletionMessageType('error');
+      console.error(
+        "Failed to resume focus session:",
+        error
+      );
+
+      /*
+       * Остаёмся на паузе.
+       */
+      timerStartedAtRef.current = null;
+      timerBaseSecondsRef.current = frozenElapsed;
+      setElapsedSeconds(frozenElapsed);
+
+      setNow((previous) => ({
+        ...previous,
+        status: "paused",
+        elapsed_seconds: frozenElapsed,
+      }));
+
+      showError("Не удалось продолжить");
     } finally {
+      transitionRef.current = false;
       setLoading(false);
+      endAction();
     }
   };
 
-  // Complete the focus session - this will show a modal
-  // We'll handle the modal state in this component for simplicity.
-  const [showCompleteModal, setShowCompleteModal] = useState(false);
-  const [completionMode, setCompletionMode] = useState(null); // 'manual' or 'ai_verified'
-  const [evidence, setEvidence] = useState([]); // For AI verification, we might need to collect evidence
+  /*
+   * ------------------------------------------------------------------
+   * COMPLETE
+   * ------------------------------------------------------------------
+   */
 
-  const handleCompleteFocus = async () => {
-    // We are going to show a modal to choose completion mode and optionally add evidence.
+  const handleCompleteFocus = () => {
+    if (!now.session_id || isFocusCompleted) {
+      return;
+    }
+
+    setCompletionMode(null);
+    setEvidence([]);
     setShowCompleteModal(true);
   };
 
   const handleCompleteModalClose = () => {
+    if (actionInProgressRef.current) {
+      return;
+    }
+
     setShowCompleteModal(false);
     setCompletionMode(null);
     setEvidence([]);
   };
 
-  const handleCompleteModalSubmit = async () => {
-    if (!now.session_id) {
-      setShowCompleteModal(false);
+  /*
+   * IMPORTANT:
+   * mode is passed directly to this function.
+   * We don't do:
+   *
+   * setCompletionMode("manual");
+   * handleCompleteModalSubmit();
+   *
+   * because React state updates are asynchronous.
+   */
+  const handleCompleteModalSubmit = async (mode) => {
+    if (!now.session_id || !mode) {
       return;
     }
 
+    if (!beginAction()) {
+      return;
+    }
+
+    /*
+     * Stop the timer BEFORE talking to the backend.
+     */
+    transitionRef.current = true;
+
+    const frozenElapsed = elapsedSeconds;
+
+    timerBaseSecondsRef.current = frozenElapsed;
+    timerStartedAtRef.current = null;
+    setElapsedSeconds(frozenElapsed);
+
     try {
       setLoading(true);
+
       const response = await fetch(
         `/api/focus/${now.session_id}/complete`,
         {
@@ -299,8 +713,7 @@ export default function NowBlock() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            completion_mode: completionMode,
-            evidence: evidence,
+            completion_mode: mode,
           }),
         }
       );
@@ -311,125 +724,207 @@ export default function NowBlock() {
 
       const data = await response.json();
 
-      // We expect the response to contain the session data after completion.
-      // However, for AI verification, the verification might be pending.
-      // We will update via polling and also show a completion message.
+      /*
+       * Immediately mark the local session as completed.
+       * This prevents the timer from restarting while waiting
+       * for polling/SSE.
+       */
+      setNow((previous) => ({
+        ...previous,
+        status: "completed",
+        verification_status:
+          data.verification_status ??
+          previous.verification_status,
+        elapsed_seconds:
+          data.elapsed_seconds ??
+          frozenElapsed,
+      }));
 
-      setCompletionMessage(
-        `Сессия завершена! +${data.xp_awarded || 0} XP`
-      );
-      setCompletionMessageType(
-        data.verification_status === 'approved' ? 'success' : 'pending'
+      const finalElapsed = Number(
+        data.elapsed_seconds ?? frozenElapsed
       );
 
-      // Close the modal
+      timerBaseSecondsRef.current = finalElapsed;
+      timerStartedAtRef.current = null;
+      setElapsedSeconds(finalElapsed);
+
+      const isPending =
+        data.completion_mode === "ai_verified" ||
+        data.verification_status === "pending";
+
+      if (isPending) {
+        setCompletionMessage(
+          "Отправлено на проверку AI. XP начислится после проверки."
+        );
+        setCompletionMessageType("pending");
+      } else {
+        setCompletionMessage(
+          `Сессия завершена! +${data.xp_awarded || 0} XP`
+        );
+        setCompletionMessageType(
+          data.verification_status === "approved" ? "success" : "error"
+        );
+      }
+
       setShowCompleteModal(false);
       setCompletionMode(null);
       setEvidence([]);
+
+      /*
+       * Refresh after local state has already been frozen.
+       */
+      await loadNow();
     } catch (error) {
-      console.error("Failed to complete focus session:", error);
-      setCompletionMessage("Не удалось завершить сессию");
-      setCompletionMessageType('error');
+      console.error(
+        "Failed to complete focus session:",
+        error
+      );
+
+      /*
+       * If completion failed, restore the appropriate local state.
+       *
+       * If it was active, restart the timer.
+       * If it was paused, keep it frozen.
+       */
+      if (isFocusActive) {
+        timerBaseSecondsRef.current = frozenElapsed;
+        timerStartedAtRef.current = Date.now();
+      } else {
+        timerBaseSecondsRef.current = frozenElapsed;
+        timerStartedAtRef.current = null;
+      }
+
+      setElapsedSeconds(frozenElapsed);
+
+      showError("Не удалось завершить сессию");
     } finally {
+      transitionRef.current = false;
       setLoading(false);
+      endAction();
+
+      loadNow();
     }
   };
+  /*
+   * ------------------------------------------------------------------
+   * ADD EVIDENC
+   * ------------------------------------------------------------------
+   */
 
-  // If we are in a focus session, we want to update the elapsed time more frequently
-  // We'll use a separate interval for the timer.
-  useEffect(() => {
-    if (isFocusActive || isFocusPaused) {
-      const timerInterval = window.setInterval(() => {
-        // We don't need to fetch the whole state, just update the elapsed time.
-        // But we don't have the started_at and paused state in the component state.
-        // So we will rely on the polling of the now endpoint to update the elapsed seconds.
-        // We'll just set a shorter polling interval for the now endpoint when in focus.
-        // However, we already have a 15s interval. Let's change it to 5s when in focus.
-        // We'll adjust the loadNow interval dynamically? Alternatively, we can just use a separate timer for the display.
-        // We'll compute the elapsed time based on the started_at and paused_at that we have in the now state.
-        // But we don't store the started_at in the component state.
-        // We will store the started_at and paused_at in the component state when we get the focus session.
-        // Let's change the now state to include more fields for focus sessions.
-        // We already have: session_id, status, lesson_id, lesson_subject, lesson_description, goal_text, started_at, elapsed_seconds.
-        // We can use the elapsed_seconds from the now state for the timer.
-        // So we don't need a separate timer for the display, we can just use the elapsed_seconds from the state.
-        // However, the elapsed_seconds in the state is updated only every 15s by the polling.
-        // We want to update the display every second.
-        // Therefore, we will start a timer that updates the displayed elapsed time every second,
-        // but we will keep the actual elapsed_seconds from the state as the source of truth for when we need to send to the backend.
-        // We'll store the elapsed time for display in a separate state variable.
-        // We'll initialize it from the now.elapsed_seconds and then update it every second.
-        // When we get a new now state, we reset the display elapsed time to the now.elapsed_seconds.
-      }, 1000);
-
-      return () => {
-        window.clearInterval(timerInterval);
-      };
-    }
-  }, [isFocusActive, isFocusPaused, now.elapsed_seconds]);
-
-  // We'll create a state variable for the displayed elapsed time.
-  const [displayedElapsedSeconds, setDisplayedElapsedSeconds] = useState(0);
-
-  useEffect(() => {
-    if (!isFocusActive && !isFocusPaused) {
-      setDisplayedElapsedSeconds(0);
-      return;
+  const handleAddEvidence = async (payload) => {
+    if (!now.session_id) {
+      throw new Error("Нет активной сессии");
     }
 
-    setDisplayedElapsedSeconds(now.elapsed_seconds || 0);
+    const formData = new FormData();
+    formData.append("type", payload.type);
 
-    if (!isFocusActive) {
-      return; // на паузе — просто синхронизируемся и стоим
+    if (payload.type === "image") {
+      if (!(payload.file instanceof File)) {
+        throw new Error("Файл изображения не выбран");
+      }
+      formData.append("file", payload.file);
+      if (payload.content) {
+        formData.append("content", payload.content);
+      }
+    } else {
+      formData.append("content", payload.content || "");
     }
 
-    const interval = window.setInterval(() => {
-      setDisplayedElapsedSeconds((prev) => prev + 1);
-    }, 1000);
+    const response = await fetch(
+      `/api/focus/${now.session_id}/evidence`,
+      {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+        // Content-Type намеренно не выставляем — браузер сам подставит
+        // multipart/form-data с корректным boundary.
+      }
+    );
 
-    return () => window.clearInterval(interval);
-  }, [isFocusActive, isFocusPaused, now.elapsed_seconds]);
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const err = await response.json();
+        if (err && err.detail) {
+          detail = `: ${err.detail}`;
+        }
+      } catch {
+        // ignore
+      }
+      throw new Error(`Не удалось добавить (${response.status})${detail}`);
+    }
 
-  const formattedDisplayedElapsed = formatElapsedTime(displayedElapsedSeconds);
+    const created = await response.json();
+    setEvidence((previous) => [...previous, created]);
+    return created;
+  };
+  /*
+   * ------------------------------------------------------------------
+   * DISPLAY HELPERS
+   * ------------------------------------------------------------------
+   */
+
+  const formattedElapsed = formatElapsedTime(
+    elapsedSeconds
+  );
+
+  const statusLabel = isFocusActive
+    ? "В ФОКУСЕ"
+    : isFocusPaused
+      ? "ПАУЗА"
+      : isFocusCompleted
+        ? "ЗАВЕРШЕНО"
+        : "";
+
+  const statusClass = isFocusActive
+    ? "border-accentGreen/20 bg-accentGreen/10 text-accentGreen"
+    : isFocusPaused
+      ? "border-accentYellow/20 bg-accentYellow/10 text-accentYellow"
+      : "border-border bg-background/60 text-secondary";
+
+  const isActionDisabled =
+    loading || actionInProgressRef.current;
+
+  /*
+   * ------------------------------------------------------------------
+   * RENDER
+   * ------------------------------------------------------------------
+   */
 
   return (
     <section
       className="
-        group
         relative
         overflow-hidden
         rounded-2xl
         border
         border-border
         bg-panel
-        p-6
-        transition-all
-        duration-300
-        ease-out
-        hover:border-accentBlue/30
-        hover:shadow-[0_12px_40px_rgba(0,0,0,0.22)]
+        transition-colors
+        duration-200
+        hover:border-accentBlue/20
       "
     >
-      {/* Glow */}
+      {/* Subtle accent — intentionally much quieter than the previous glow */}
       <div
         className="
           pointer-events-none
           absolute
-          -right-16
-          -top-16
-          h-32
-          w-32
+          right-0
+          top-0
+          h-40
+          w-40
           rounded-full
-          bg-accentBlue/10
+          bg-accentBlue/5
           blur-3xl
-          opacity-50
-          transition-opacity
-          duration-300
-          group-hover:opacity-80
         "
       />
 
-      {/* Header */}
+      {/* ------------------------------------------------------------ */}
+      {/* HEADER */}
+      {/* ------------------------------------------------------------ */}
+
       <div
         className="
           relative
@@ -438,7 +933,8 @@ export default function NowBlock() {
           justify-between
           border-b
           border-border
-          pb-4
+          px-6
+          py-4
         "
       >
         <div className="flex items-center gap-3">
@@ -449,18 +945,14 @@ export default function NowBlock() {
               w-9
               items-center
               justify-center
-              rounded-xl
+              rounded-lg
               border
               border-accentBlue/20
               bg-accentBlue/10
               text-accentBlue
-              transition-all
-              duration-300
-              group-hover:border-accentBlue/30
-              group-hover:bg-accentBlue/15
             "
           >
-            {now.type === 'focus' ? (
+            {now.type === "focus" ? (
               <FiClock size={16} />
             ) : (
               <FiBookOpen size={16} />
@@ -468,11 +960,29 @@ export default function NowBlock() {
           </div>
 
           <div>
-            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-secondary">
-              {now.type === 'focus' ? 'Текущий фокус' : 'Сегодняшнее занятие'}
+            <p
+              className="
+                text-[10px]
+                font-medium
+                uppercase
+                tracking-[0.18em]
+                text-secondary
+              "
+            >
+              {now.type === "focus"
+                ? "Текущий фокус"
+                : "Текущее состояние"}
             </p>
 
-            <h2 className="mt-0.5 text-lg font-semibold tracking-tight text-primary">
+            <h2
+              className="
+                mt-0.5
+                text-lg
+                font-semibold
+                tracking-tight
+                text-primary
+              "
+            >
               СЕЙЧАС
             </h2>
           </div>
@@ -491,12 +1001,11 @@ export default function NowBlock() {
               rounded-lg
               border
               border-border
-              bg-background/60
+              bg-background/50
               px-3
               py-1.5
               font-mono
               text-xs
-              font-medium
               text-secondary
             "
           >
@@ -505,744 +1014,1470 @@ export default function NowBlock() {
         </div>
       </div>
 
-      {/* Completion Message Banner */}
+      {/* ------------------------------------------------------------ */}
+      {/* MESSAGE */}
+      {/* ------------------------------------------------------------ */}
+
       {completionMessage && (
         <div
           className={`
-              mt-4
-              px-4 
-              py-2 
-              rounded-lg 
-              text-sm 
-              font-medium 
-              flex 
-              items-center 
-              justify-between
-              ${completionMessageType === 'success'
-              ? 'bg-accentGreen/10 border border-accentGreen/20 text-accentGreen'
-              : completionMessageType === 'error'
-                ? 'bg-accentRed/10 border border-accentRed/20 text-accentRed'
-                : 'bg-accentYellow/10 border border-accentYellow/20 text-accentYellow'
+            mx-6
+            mt-4
+            flex
+            items-center
+            justify-between
+            gap-3
+            rounded-lg
+            border
+            px-4
+            py-3
+            text-sm
+            font-medium
+            ${completionMessageType === "success"
+              ? "border-accentGreen/20 bg-accentGreen/10 text-accentGreen"
+              : completionMessageType === "error"
+                ? "border-accentRed/20 bg-accentRed/10 text-accentRed"
+                : "border-accentYellow/20 bg-accentYellow/10 text-accentYellow"
             }
-`}
+          `}
         >
           <div>{completionMessage}</div>
-          {completionMessageType !== 'pending' && (
-            <FiX
-              size={14}
-              className="cursor-pointer"
+
+          {completionMessageType !== "pending" && (
+            <button
+              type="button"
+              className="
+                rounded-md
+                p-1
+                transition-colors
+                hover:bg-white/5
+              "
               onClick={() => {
                 setCompletionMessage(null);
-                setCompletionMessageType('');
+                setCompletionMessageType("");
               }}
-            />
+              aria-label="Закрыть сообщение"
+            >
+              <FiX size={14} />
+            </button>
           )}
         </div>
       )}
 
-      {/* Content */}
-      <div className="relative mt-5">
-        {loading ? (
-          <div className="space-y-4 animate-pulse">
-            <div className="h-8 w-2/3 rounded-lg bg-background" />
-            <div className="h-4 w-24 rounded bg-background" />
-            <div className="h-4 w-4/5 rounded bg-background" />
+      {/* ------------------------------------------------------------ */}
+      {/* CONTENT */}
+      {/* ------------------------------------------------------------ */}
 
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <div className="h-12 rounded-xl bg-background" />
-              <div className="h-12 rounded-xl bg-background" />
-            </div>
-
-            <div className="h-12 rounded-xl bg-background" />
-          </div>
-        ) : now.type === 'idle' ? (
-          <div
-            className="
-              flex
-              min-h-[190px]
-              flex-col
-              items-center
-              justify-center
-              rounded-xl
-              border
-              border-dashed
-              border-border
-              bg-background/40
-              px-6
-              text-center
-            "
-          >
-            <div
-              className="
-                mb-3
-                flex
-                h-11
-                w-11
-                items-center
-                justify-center
-                rounded-xl
-                border
-                border-border
-                bg-background
-                text-secondary
-              "
-            >
-              <FiBookOpen size={18} />
-            </div>
-
-            <p className="text-sm font-medium text-primary">
-              Сейчас нет активного занятия
-            </p>
-
-            <p className="mt-1 text-xs leading-5 text-secondary">
-              Здесь появится текущее событие расписания.
-            </p>
-
-            <button
-              type="button"
-              className="
-                mt-5
-                flex
-                w-full
-                items-center
-                justify-center
-                gap-2.5
-                rounded-xl
-                border
-                border-accentBlue/20
-                bg-accentBlue
-                px-4
-                py-3
-                text-sm
-                font-semibold
-                text-white
-                shadow-[0_8px_24px_rgba(30,130,255,0.14)]
-                transition-all
-                duration-200
-                ease-out
-                hover:-translate-y-0.5
-                hover:bg-accentBlue/90
-                hover:shadow-[0_12px_30px_rgba(30,130,255,0.2)]
-                active:translate-y-0
-                active:scale-[0.99]
-              "
-              onClick={handleStartFocus}
-            >
-              <FiPlay size={15} />
-              НАЧАТЬ
-            </button>
-          </div>
-        ) : now.type === 'lesson' ? (
-          <>
-            {/* Main */}
-            <div>
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p
-                    className="
-                      text-2xl
-                      font-semibold
-                      leading-tight
-                      tracking-tight
-                      text-primary
-                    "
-                  >
-                    {now.lesson_subject}
-                  </p>
-
-                  {now.category && (
-                    <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-accentBlue/15 bg-accentBlue/10 px-2.5 py-1.5">
-                      <FiBookOpen
-                        size={12}
-                        className="text-accentBlue"
-                      />
-
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accentBlue">
-                        {now.category}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {now.lesson_description && (
-                <p
-                  className="
-                    mt-4
-                    max-w-3xl
-                    text-sm
-                    leading-6
-                    text-secondary
-                  "
-                >
-                  {now.lesson_description}
-                </p>
-              )}
-            </div>
-
-            {/* Meta */}
-            <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div
-                className="
-                  rounded-xl
-                  border
-                  border-border
-                  bg-background/50
-                  px-4
-                  py-3
-                  transition-all
-                  duration-200
-                  hover:border-accentBlue/20
-                  hover:bg-background/70
-                "
-              >
-                <div className="flex items-center gap-2 text-secondary">
-                  <FiClock size={14} />
-
-                  <span className="text-[10px] font-medium uppercase tracking-[0.14em]">
-                    Время занятия
-                  </span>
-                </div>
-
-                <p className="mt-2 font-mono text-sm font-medium text-primary">
-                  {now.time_estimate || "Не указано"}
-                </p>
-              </div>
-
-              <div
-                className="
-                  rounded-xl
-                  border
-                  border-border
-                  bg-background/50
-                  px-4
-                  py-3
-                  transition-all
-                  duration-200
-                  hover:border-accentYellow/20
-                  hover:bg-background/70
-                "
-              >
-                <div className="flex items-center gap-2 text-secondary">
-                  <FiFlag size={14} />
-
-                  <span className="text-[10px] font-medium uppercase tracking-[0.14em]">
-                    Тип
-                  </span>
-                </div>
-
-                <p className="mt-2 text-sm font-medium text-primary">
-                  {formatLessonType(now.priority)}
-                </p>
-              </div>
-            </div>
-
-            {/* XP Preview and Start Button */}
-            <div
-              className="
-                mt-4
-                flex
-                items-center
-                justify-between
-                rounded-xl
-                border
-                border-accentYellow/15
-                bg-accentYellow/5
-                px-4
-                py-3
-              "
-            >
-              <div className="flex items-center gap-2.5">
-                <div
-                  className="
-                    flex
-                    h-8
-                    w-8
-                    items-center
-                    justify-center
-                    rounded-lg
-                    bg-accentYellow/10
-                    text-accentYellow
-                  "
-                >
-                  <FiZap size={15} />
-                </div>
-
-                <span className="text-xs font-medium uppercase tracking-[0.14em] text-secondary">
-                  Награда за фокус
-                </span>
-              </div>
-
-              <span className="font-mono text-sm font-semibold text-accentYellow">
-                +{now.completion_mode === 'manual' ? 3 : 10} XP
-              </span>
-            </div>
-
-            <button
-              type="button"
-              className="
-                mt-5
-                flex
-                w-full
-                items-center
-                justify-center
-                gap-2.5
-                rounded-xl
-                border
-                border-accentBlue/20
-                bg-accentBlue
-                px-4
-                py-3
-                text-sm
-                font-semibold
-                text-white
-                shadow-[0_8px_24px_rgba(30,130,255,0.14)]
-                transition-all
-                duration-200
-                ease-out
-                hover:-translate-y-0.5
-                hover:bg-accentBlue/90
-                hover:shadow-[0_12px_30px_rgba(30,130,255,0.2)]
-                active:translate-y-0
-                active:scale-[0.99]
-              "
-              onClick={handleStartFocus}
-            >
-              <FiPlay size={15} />
-              НАЧАТЬ ФОКУС
-            </button>
-          </>
-        ) : now.type === 'focus' ? (
-          <>
-            {/* Main */}
-            <div>
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p
-                    className="
-                      text-2xl
-                      font-semibold
-                      leading-tight
-                      tracking-tight
-                      text-primary
-                    "
-                  >
-                    {now.lesson_subject || 'Без урока'}
-                  </p>
-
-                  {now.category && (
-                    <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-accentBlue/15 bg-accentBlue/10 px-2.5 py-1.5">
-                      <FiBookOpen
-                        size={12}
-                        className="text-accentBlue"
-                      />
-
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accentBlue">
-                        {now.category}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {now.lesson_description && (
-                <p
-                  className="
-                    mt-4
-                    max-w-3xl
-                    text-sm
-                    leading-6
-                    text-secondary
-                  "
-                >
-                  {now.lesson_description}
-                </p>
-              )}
-
-              {now.goal_text && (
-                <p
-                  className="
-                    mt-2
-                    text-sm
-                    leading-5
-                    text-secondary
-                  "
-                >
-                  Цель: {now.goal_text}
-                </p>
-              )}
-            </div>
-
-            {/* Timer and Controls */}
-            <div className="mt-6">
-              <div className="text-center mb-4">
-                <p className="text-xs font-medium uppercase tracking-[0.14em] text-secondary">
-                  Затраченное время
-                </p>
-                <p className="font-mono text-2xl font-semibold text-primary">
-                  {formattedDisplayedElapsed}
-                </p>
-              </div>
-
-              <div className="flex items-center justify-between">
-                {isFocusActive && (
-                  <>
-                    <button
-                      type="button"
-                      className="
-                        flex
-                        items-center
-                        justify-center
-                        gap-2
-                        rounded-xl
-                        border
-                        border-accentYellow/20
-                        bg-accentYellow/5
-                        px-3
-                        py-2
-                        text-sm
-                        font-medium
-                        text-accentYellow
-                        hover:bg-accentYellow/10
-                      "
-                      onClick={handlePauseFocus}
-                    >
-                      <FiPause size={16} />
-                      ПАУЗА
-                    </button>
-
-                    <button
-                      type="button"
-                      className="
-                        ml-3
-                        flex
-                        items-center
-                        justify-center
-                        gap-2
-                        rounded-xl
-                        border
-                        border-accentBlue/20
-                        bg-accentBlue
-                        px-3
-                        py-2
-                        text-sm
-                        font-semibold
-                        text-white
-                        shadow-[0_8px_24px_rgba(30,130,255,0.14)]
-                        transition-all
-                        duration-200
-                        ease-out
-                        hover:-translate-y-0.5
-                        hover:bg-accentBlue/90
-                        hover:shadow-[0_12px_30px_rgba(30,130,255,0.2)]
-                        active:translate-y-0
-                        active:scale-[0.99]
-                      "
-                      onClick={handleCompleteFocus}
-                    >
-                      <FiCheckCircle size={16} />
-                      ЗАВЕРШИТЬ
-                    </button>
-                  </>
-                )}
-
-                {isFocusPaused && (
-                  <>
-                    <button
-                      type="button"
-                      className="
-                        flex
-                        items-center
-                        justify-center
-                        gap-2
-                        rounded-xl
-                        border
-                        border-accentYellow/20
-                        bg-accentYellow/5
-                        px-3
-                        py-2
-                        text-sm
-                        font-medium
-                        text-accentYellow
-                        hover:bg-accentYellow/10
-                      "
-                      onClick={handleResumeFocus}
-                    >
-                      <FiPlay size={16} />
-                      ПРОДОЛЖИТЬ
-                    </button>
-
-                    <button
-                      type="button"
-                      className="
-                        ml-3
-                        flex
-                        items-center
-                        justify-center
-                        gap-2
-                        rounded-xl
-                        border
-                        border-accentBlue/20
-                        bg-accentBlue
-                        px-3
-                        py-2
-                        text-sm
-                        font-semibold
-                        text-white
-                        shadow-[0_8px_24px_rgba(30,130,255,0.14)]
-                        transition-all
-                        duration-200
-                        ease-out
-                        hover:-translate-y-0.5
-                        hover:bg-accentBlue/90
-                        hover:shadow-[0_12px_30px_rgba(30,130,255,0.2)]
-                        active:translate-y-0
-                        active:scale-[0.99]
-                      "
-                      onClick={handleCompleteFocus}
-                    >
-                      <FiCheckCircle size={16} />
-                      ЗАВЕРШИТЬ
-                    </button>
-                  </>
-                )}
-
-                {isFocusCompleted && (
-                  <div>
-                    <span className="text-xs font-medium uppercase tracking-[0.14em] text-secondary">
-                      Статус:
-                    </span>
-                    <span className="font-mono text-sm font-medium">
-                      {now.verification_status === 'approved'
-                        ? 'Подтверждено'
-                        : now.verification_status === 'rejected'
-                          ? 'Отклонено'
-                          : now.verification_status === 'partial'
-                            ? 'Частично'
-                            : 'Не требуется'}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
+      <div className="relative p-6">
+        {loading && !hasTask ? (
+          <LoadingSkeleton />
+        ) : now.type === "idle" ? (
+          <IdleState
+            onStart={handleStartFocus}
+            disabled={loading}
+          />
+        ) : now.type === "lesson" ? (
+          <LessonState
+            now={now}
+            onStart={handleStartFocus}
+            disabled={loading}
+          />
+        ) : now.type === "focus" ? (
+          <FocusState
+            now={now}
+            formattedElapsed={formattedElapsed}
+            statusLabel={statusLabel}
+            statusClass={statusClass}
+            isFocusActive={isFocusActive}
+            isFocusPaused={isFocusPaused}
+            isFocusCompleted={isFocusCompleted}
+            loading={loading}
+            onPause={handlePauseFocus}
+            onResume={handleResumeFocus}
+            onComplete={handleCompleteFocus}
+            onStart={handleStartFocus}
+          />
         ) : (
-          <div>Неизвестное состояние</div>
+          <div className="py-10 text-center text-sm text-secondary">
+            Неизвестное состояние
+          </div>
         )}
       </div>
 
-      {/* Complete Focus Session Modal */}
+      {/* ------------------------------------------------------------ */}
+      {/* COMPLETION MODAL */}
+      {/* ------------------------------------------------------------ */}
+
       {showCompleteModal && (
-        <div
-          className="
-            fixed
-            inset-0
-            bg-black/50
-            flex
-            items-center
-            justify-center
-            z-50
-            backdrop-blur-sm
-          "
-        >
-          <div
-            className="
-              relative
-              bg-panel
-              rounded-2xl
-              p-6
-              w-96
-              max-w-full
-              shadow-2xl
-              border
-              border-border
-            "
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div
-                  className="
-                    flex
-                    h-10
-                    w-10
-                    items-center
-                    justify-center
-                    rounded-xl
-                    border
-                    border-accentBlue/20
-                    bg-accentBlue/10
-                    text-accentBlue
-                  "
-                >
-                  <FiBookOpen size={18} />
-                </div>
-
-                <div>
-                  <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-secondary">
-                    Как завершить фокус-сессию?
-                  </p>
-
-                  <h2 className="mt-0.5 text-lg font-semibold tracking-tight text-primary">
-                    ЗАВЕРШЕНИЕ
-                  </h2>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="
-                  p-1
-                  rounded-xl
-                  border
-                  border-transparent
-                  hover:border-accentBlue/20
-                  hover:bg-accentBlue/5
-                "
-                onClick={handleCompleteModalClose}
-              >
-                <FiX size={18} className="text-secondary" />
-              </button>
-            </div>
-
-            <div className="mb-6">
-              <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-secondary">
-                Выберите способ завершения:
-              </p>
-              <div className="mt-4 space-y-3">
-                <div
-                  className="
-                    flex
-                    items-center
-                    justify-between
-                    rounded-xl
-                    border
-                    border-accentBlue/20
-                    bg-accentBlue/5
-                    px-4
-                    py-3
-                  "
-                >
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="
-                        flex
-                        h-8
-                        w-8
-                        items-center
-                        justify-center
-                        rounded-lg
-                        bg-accentYellow/10
-                        text-accentYellow
-                      "
-                    >
-                      <FiZap size={14} />
-                    </div>
-
-                    <div>
-                      <span className="text-xs font-medium uppercase tracking-[0.14em]">
-                        Завершить вручную
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="
-                      w-full
-                      text-left
-                      py-2
-                      px-3
-                      rounded-lg
-                      border
-                      border-transparent
-                      hover:bg-accentBlue/5
-                    "
-                    onClick={() => {
-                      setCompletionMode('manual');
-                      setEvidence([]);
-                      handleCompleteModalSubmit();
-                    }}
-                  >
-                    Получить базовую награду (3 XP)
-                  </button>
-                </div>
-
-                {/* AI Verification Option - only show if AI verification is enabled in user settings */}
-                {/* We don't have the user settings in this component, so we'll assume it's enabled for now.
-                   In a real implementation, we would fetch the user settings or have it passed in via context or props. */}
-                <div
-                  className="
-                    flex
-                    items-center
-                    justify-between
-                    rounded-xl
-                    border
-                    border-accentBlue/20
-                    bg-accentBlue/5
-                    px-4
-                    py-3
-                  "
-                >
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="
-                        flex
-                        h-8
-                        w-8
-                        items-center
-                        justify-center
-                        rounded-lg
-                        bg-accentYellow/10
-                        text-accentYellow
-                      "
-                    >
-                      <FiZap size={14} />
-                    </div>
-
-                    <div>
-                      <span className="text-xs font-medium uppercase tracking-[0.14em]">
-                        Отправить на проверку AI
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="
-                      w-full
-                      text-left
-                      py-2
-                      px-3
-                      rounded-lg
-                      border
-                      border-transparent
-                      hover:bg-accentBlue/5
-                    "
-                    onClick={() => {
-                      setCompletionMode('ai_verified');
-                      // We would need to collect evidence here, but for now we'll leave it empty.
-                      // In a real implementation, we would show a form to add evidence.
-                      setEvidence([]);
-                      handleCompleteModalSubmit();
-                    }}
-                  >
-                    Получить основную награду (10 XP) + бонус за результат
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <CompletionModal
+          completionMode={completionMode}
+          loading={loading}
+          evidence={evidence}
+          onClose={handleCompleteModalClose}
+          onSelect={(mode) => {
+            setCompletionMode(mode);
+          }}
+          onSubmit={handleCompleteModalSubmit}
+          onAddEvidence={handleAddEvidence}
+        />
       )}
     </section>
   );
 }
+
+/* ================================================================== */
+/* LOADING */
+/* ================================================================== */
+
+function LoadingSkeleton() {
+  return (
+    <div className="space-y-5 animate-pulse">
+      <div className="h-7 w-2/3 rounded-lg bg-background" />
+      <div className="h-4 w-1/3 rounded bg-background" />
+      <div className="h-4 w-4/5 rounded bg-background" />
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="h-16 rounded-xl bg-background" />
+        <div className="h-16 rounded-xl bg-background" />
+      </div>
+
+      <div className="h-11 rounded-xl bg-background" />
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* IDLE */
+/* ================================================================== */
+
+function IdleState({ onStart, disabled }) {
+  return (
+    <div
+      className="
+        flex
+        min-h-[190px]
+        flex-col
+        items-center
+        justify-center
+        rounded-xl
+        border
+        border-dashed
+        border-border
+        bg-background/30
+        px-6
+        text-center
+      "
+    >
+      <div
+        className="
+          mb-3
+          flex
+          h-11
+          w-11
+          items-center
+          justify-center
+          rounded-xl
+          border
+          border-border
+          bg-background
+          text-secondary
+        "
+      >
+        <FiBookOpen size={18} />
+      </div>
+
+      <p className="text-sm font-medium text-primary">
+        Сейчас нет активного занятия
+      </p>
+
+      <p className="mt-1 text-xs leading-5 text-secondary">
+        Здесь появится текущее событие расписания.
+      </p>
+
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onStart}
+        className="
+          mt-5
+          flex
+          w-full
+          items-center
+          justify-center
+          gap-2
+          rounded-xl
+          bg-accentBlue
+          px-4
+          py-3
+          text-sm
+          font-semibold
+          text-white
+          transition-all
+          duration-200
+          hover:bg-accentBlue/90
+          active:scale-[0.99]
+          disabled:cursor-not-allowed
+          disabled:opacity-50
+        "
+      >
+        <FiPlay size={15} />
+        НАЧАТЬ
+      </button>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* LESSON */
+/* ================================================================== */
+
+function LessonState({ now, onStart, disabled }) {
+  return (
+    <>
+      <div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p
+              className="
+                text-2xl
+                font-semibold
+                leading-tight
+                tracking-tight
+                text-primary
+              "
+            >
+              {now.lesson_subject || "Без названия"}
+            </p>
+
+            {now.category && (
+              <CategoryBadge category={now.category} />
+            )}
+          </div>
+        </div>
+
+        {now.lesson_description && (
+          <p
+            className="
+              mt-4
+              max-w-3xl
+              text-sm
+              leading-6
+              text-secondary
+            "
+          >
+            {now.lesson_description}
+          </p>
+        )}
+      </div>
+
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <MetaCard
+          icon={<FiClock size={14} />}
+          label="Время занятия"
+          value={now.time_estimate || "Не указано"}
+        />
+
+        <MetaCard
+          icon={<FiFlag size={14} />}
+          label="Тип"
+          value={formatLessonType(now.priority)}
+        />
+      </div>
+
+      <div
+        className="
+          mt-4
+          flex
+          items-center
+          justify-between
+          rounded-xl
+          border
+          border-accentYellow/15
+          bg-accentYellow/5
+          px-4
+          py-3
+        "
+      >
+        <div className="flex items-center gap-2.5">
+          <div
+            className="
+              flex
+              h-8
+              w-8
+              items-center
+              justify-center
+              rounded-lg
+              bg-accentYellow/10
+              text-accentYellow
+            "
+          >
+            <FiZap size={15} />
+          </div>
+
+          <span
+            className="
+              text-xs
+              font-medium
+              uppercase
+              tracking-[0.14em]
+              text-secondary
+            "
+          >
+            Награда за фокус
+          </span>
+        </div>
+
+        <span
+          className="
+            font-mono
+            text-sm
+            font-semibold
+            text-accentYellow
+          "
+        >
+          +{now.completion_mode === "manual" ? 3 : 10} XP
+        </span>
+      </div>
+
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onStart}
+        className="
+          mt-5
+          flex
+          w-full
+          items-center
+          justify-center
+          gap-2.5
+          rounded-xl
+          bg-accentBlue
+          px-4
+          py-3
+          text-sm
+          font-semibold
+          text-white
+          transition-all
+          duration-200
+          hover:bg-accentBlue/90
+          active:scale-[0.99]
+          disabled:cursor-not-allowed
+          disabled:opacity-50
+        "
+      >
+        <FiPlay size={15} />
+        НАЧАТЬ ФОКУС
+      </button>
+    </>
+  );
+}
+
+/* ================================================================== */
+/* FOCUS */
+/* ================================================================== */
+
+function FocusState({
+  now,
+  formattedElapsed,
+  statusLabel,
+  statusClass,
+  isFocusActive,
+  isFocusPaused,
+  isFocusCompleted,
+  loading,
+  onPause,
+  onResume,
+  onComplete,
+  onStart,
+}) {
+  return (
+    <>
+      {/* Header information */}
+      <div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p
+              className="
+                text-2xl
+                font-semibold
+                leading-tight
+                tracking-tight
+                text-primary
+              "
+            >
+              {now.lesson_subject || "Без урока"}
+            </p>
+
+            {now.category && (
+              <CategoryBadge category={now.category} />
+            )}
+          </div>
+
+          {statusLabel && (
+            <span
+              className={`
+                shrink-0
+                rounded-lg
+                border
+                px-2.5
+                py-1.5
+                text-[10px]
+                font-semibold
+                uppercase
+                tracking-[0.14em]
+                ${statusClass}
+              `}
+            >
+              {statusLabel}
+            </span>
+          )}
+        </div>
+
+        {now.lesson_description && (
+          <p
+            className="
+              mt-4
+              max-w-3xl
+              text-sm
+              leading-6
+              text-secondary
+            "
+          >
+            {now.lesson_description}
+          </p>
+        )}
+
+        {now.goal_text && (
+          <div
+            className="
+              mt-3
+              rounded-lg
+              border
+              border-border
+              bg-background/30
+              px-3
+              py-2.5
+            "
+          >
+            <span
+              className="
+                text-[10px]
+                font-medium
+                uppercase
+                tracking-[0.14em]
+                text-secondary
+              "
+            >
+              Цель
+            </span>
+
+            <p className="mt-1 text-sm text-primary">
+              {now.goal_text}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Timer */}
+      <div
+        className="
+          mt-6
+          rounded-xl
+          border
+          border-border
+          bg-background/40
+          px-5
+          py-5
+        "
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <p
+              className="
+                text-[10px]
+                font-medium
+                uppercase
+                tracking-[0.16em]
+                text-secondary
+              "
+            >
+              Затраченное время
+            </p>
+
+            <p
+              className="
+                mt-1
+                font-mono
+                text-4xl
+                font-semibold
+                tracking-tight
+                text-primary
+                tabular-nums
+              "
+            >
+              {formattedElapsed}
+            </p>
+          </div>
+
+          <div
+            className={`
+              flex
+              h-11
+              w-11
+              items-center
+              justify-center
+              rounded-xl
+              border
+              ${statusClass}
+            `}
+          >
+            {isFocusActive ? (
+              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-accentGreen" />
+            ) : isFocusPaused ? (
+              <FiPause size={17} />
+            ) : (
+              <FiCheckCircle size={17} />
+            )}
+          </div>
+        </div>
+
+        {/* Controls */}
+        {!isFocusCompleted && (
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            {isFocusActive ? (
+              <button
+                type="button"
+                disabled={loading}
+                onClick={onPause}
+                className="
+                  flex
+                  items-center
+                  justify-center
+                  gap-2
+                  rounded-xl
+                  border
+                  border-accentYellow/20
+                  bg-accentYellow/5
+                  px-4
+                  py-3
+                  text-sm
+                  font-medium
+                  text-accentYellow
+                  transition-colors
+                  hover:bg-accentYellow/10
+                  disabled:cursor-not-allowed
+                  disabled:opacity-50
+                "
+              >
+                <FiPause size={16} />
+                ПАУЗА
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={loading}
+                onClick={onResume}
+                className="
+                  flex
+                  items-center
+                  justify-center
+                  gap-2
+                  rounded-xl
+                  border
+                  border-accentGreen/20
+                  bg-accentGreen/5
+                  px-4
+                  py-3
+                  text-sm
+                  font-medium
+                  text-accentGreen
+                  transition-colors
+                  hover:bg-accentGreen/10
+                  disabled:cursor-not-allowed
+                  disabled:opacity-50
+                "
+              >
+                <FiPlay size={16} />
+                ПРОДОЛЖИТЬ
+              </button>
+            )}
+
+            <button
+              type="button"
+              disabled={loading}
+              onClick={onComplete}
+              className="
+                flex
+                items-center
+                justify-center
+                gap-2
+                rounded-xl
+                bg-accentBlue
+                px-4
+                py-3
+                text-sm
+                font-semibold
+                text-white
+                transition-colors
+                hover:bg-accentBlue/90
+                active:scale-[0.99]
+                disabled:cursor-not-allowed
+                disabled:opacity-50
+              "
+            >
+              <FiCheckCircle size={16} />
+              ЗАВЕРШИТЬ
+            </button>
+          </div>
+        )}
+
+        {/* Completed */}
+        {isFocusCompleted && (
+          <div className="mt-5 space-y-3">
+            <div
+              className="
+              flex
+              items-center
+              justify-between
+              rounded-lg
+              border
+              border-accentGreen/20
+              bg-accentGreen/5
+              px-4
+              py-3
+            "
+            >
+              <div className="flex items-center gap-2">
+                <FiCheckCircle size={15} className="text-accentGreen" />
+                <span className="text-sm font-medium text-primary">
+                  Фокус-сессия завершена
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {now.xp_awarded > 0 && (
+                  <span className="font-mono text-sm font-semibold text-accentYellow">
+                    +{now.xp_awarded} XP
+                  </span>
+                )}
+                <span className="text-xs text-secondary">
+                  {formatVerificationStatus(now.verification_status)}
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              disabled={loading}
+              onClick={onStart}
+              className="
+              flex
+              w-full
+              items-center
+              justify-center
+              gap-2
+              rounded-xl
+              bg-accentBlue
+              px-4
+              py-3
+              text-sm
+              font-semibold
+              text-white
+              transition-colors
+              hover:bg-accentBlue/90
+              disabled:cursor-not-allowed
+              disabled:opacity-50
+            "
+            >
+              <FiPlay size={15} />
+              НАЧАТЬ НОВУЮ СЕССИЮ
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* ================================================================== */
+/* COMPLETION MODAL */
+/* ================================================================== */
+
+function CompletionModal({
+  completionMode,
+  loading,
+  evidence,
+  onClose,
+  onSelect,
+  onSubmit,
+  onAddEvidence,
+}) {
+  const [addingType, setAddingType] = useState(null); // null | 'text' | 'url' | 'image'
+  const [textValue, setTextValue] = useState("");
+  const [urlValue, setUrlValue] = useState("");
+  const [fileValue, setFileValue] = useState(null);
+  const [addingError, setAddingError] = useState(null);
+  const [addingInProgress, setAddingInProgress] = useState(false);
+
+  const isAiMode = completionMode === "ai_verified";
+  const isBusy = loading || addingInProgress;
+
+  const canSubmit =
+    !isBusy &&
+    Boolean(completionMode) &&
+    (!isAiMode || evidence.length > 0);
+
+  const resetAdding = () => {
+    setAddingType(null);
+    setTextValue("");
+    setUrlValue("");
+    setFileValue(null);
+    setAddingError(null);
+  };
+
+  const handleSelectMode = (mode) => {
+    onSelect(mode);
+    if (mode !== "ai_verified") {
+      resetAdding();
+    }
+  };
+
+  const handleAddClick = (type) => {
+    if (addingType === type) {
+      resetAdding();
+      return;
+    }
+    setAddingType(type);
+    setTextValue("");
+    setUrlValue("");
+    setFileValue(null);
+    setAddingError(null);
+  };
+
+  const handleAddConfirm = async () => {
+    if (!addingType) return;
+
+    setAddingError(null);
+    setAddingInProgress(true);
+
+    try {
+      if (addingType === "text") {
+        const trimmed = textValue.trim();
+        if (!trimmed) {
+          throw new Error("Введите текст доказательства");
+        }
+        await onAddEvidence({ type: "text", content: trimmed });
+      } else if (addingType === "url") {
+        const trimmed = urlValue.trim();
+        if (!trimmed) {
+          throw new Error("Введите URL");
+        }
+        if (!/^https?:\/\//i.test(trimmed)) {
+          throw new Error("URL должен начинаться с http:// или https://");
+        }
+        await onAddEvidence({ type: "url", content: trimmed });
+      } else if (addingType === "image") {
+        if (!fileValue) {
+          throw new Error("Выберите изображение");
+        }
+        await onAddEvidence({
+          type: "image",
+          file: fileValue,
+          content: fileValue.name,
+        });
+      }
+      resetAdding();
+    } catch (err) {
+      setAddingError(err?.message || "Не удалось добавить доказательство");
+    } finally {
+      setAddingInProgress(false);
+    }
+  };
+
+  return (
+    <div
+      className="
+        fixed
+        inset-0
+        z-50
+        flex
+        items-center
+        justify-center
+        bg-black/60
+        p-4
+        backdrop-blur-sm
+      "
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !isBusy) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        className="
+          w-full
+          max-w-md
+          max-h-[90vh]
+          overflow-y-auto
+          rounded-2xl
+          border
+          border-border
+          bg-panel
+          p-6
+          shadow-2xl
+        "
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="completion-title"
+      >
+        {/* HEADER */}
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div
+              className="
+                flex
+                h-10
+                w-10
+                items-center
+                justify-center
+                rounded-xl
+                border
+                border-accentBlue/20
+                bg-accentBlue/10
+                text-accentBlue
+              "
+            >
+              <FiCheckCircle size={18} />
+            </div>
+
+            <div>
+              <p
+                className="
+                  text-[10px]
+                  font-medium
+                  uppercase
+                  tracking-[0.18em]
+                  text-secondary
+                "
+              >
+                Фокус-сессия
+              </p>
+
+              <h2
+                id="completion-title"
+                className="
+                  mt-0.5
+                  text-lg
+                  font-semibold
+                  tracking-tight
+                  text-primary
+                "
+              >
+                ЗАВЕРШЕНИЕ
+              </h2>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={onClose}
+            className="
+              rounded-lg
+              p-2
+              text-secondary
+              transition-colors
+              hover:bg-background
+              hover:text-primary
+              disabled:opacity-40
+            "
+            aria-label="Закрыть"
+          >
+            <FiX size={18} />
+          </button>
+        </div>
+
+        {/* MODE */}
+        <p className="mt-6 text-sm text-secondary">
+          Выберите способ завершения фокус-сессии.
+        </p>
+
+        <div className="mt-4 space-y-3">
+          <CompletionOption
+            selected={completionMode === "manual"}
+            disabled={isBusy}
+            icon={<FiCheckCircle size={16} />}
+            title="Завершить вручную"
+            description="Базовая награда — 3 XP"
+            onClick={() => handleSelectMode("manual")}
+          />
+
+          <CompletionOption
+            selected={completionMode === "ai_verified"}
+            disabled={isBusy}
+            icon={<FiZap size={16} />}
+            title="Отправить на проверку AI"
+            description="Основная награда — 10 XP + бонус за результат"
+            onClick={() => handleSelectMode("ai_verified")}
+          />
+        </div>
+
+        {/* EVIDENCE */}
+        {isAiMode && (
+          <div className="mt-6">
+            <div className="flex items-center justify-between">
+              <p
+                className="
+                  text-[10px]
+                  font-medium
+                  uppercase
+                  tracking-[0.18em]
+                  text-secondary
+                "
+              >
+                Доказательства
+              </p>
+
+              <span className="text-[10px] font-medium text-secondary">
+                {evidence.length} / 5
+              </span>
+            </div>
+
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <EvidenceAddButton
+                icon={<FiFileText size={14} />}
+                label="Текст"
+                active={addingType === "text"}
+                disabled={isBusy || evidence.length >= 5}
+                onClick={() => handleAddClick("text")}
+              />
+              <EvidenceAddButton
+                icon={<FiLink size={14} />}
+                label="URL"
+                active={addingType === "url"}
+                disabled={isBusy || evidence.length >= 5}
+                onClick={() => handleAddClick("url")}
+              />
+              <EvidenceAddButton
+                icon={<FiImage size={14} />}
+                label="Скрин"
+                active={addingType === "image"}
+                disabled={isBusy || evidence.length >= 5}
+                onClick={() => handleAddClick("image")}
+              />
+            </div>
+
+            {addingType && (
+              <div className="mt-3 rounded-xl border border-border bg-background/40 p-3">
+                {addingType === "text" && (
+                  <textarea
+                    value={textValue}
+                    onChange={(e) => setTextValue(e.target.value)}
+                    disabled={addingInProgress}
+                    placeholder="Опишите, что было сделано..."
+                    rows={3}
+                    className="
+                      w-full
+                      resize-none
+                      rounded-lg
+                      border
+                      border-border
+                      bg-background
+                      px-3
+                      py-2
+                      text-sm
+                      text-primary
+                      placeholder:text-secondary
+                      focus:border-accentBlue/40
+                      focus:outline-none
+                      disabled:opacity-60
+                    "
+                  />
+                )}
+
+                {addingType === "url" && (
+                  <input
+                    type="url"
+                    value={urlValue}
+                    onChange={(e) => setUrlValue(e.target.value)}
+                    disabled={addingInProgress}
+                    placeholder="https://..."
+                    className="
+                      w-full
+                      rounded-lg
+                      border
+                      border-border
+                      bg-background
+                      px-3
+                      py-2
+                      text-sm
+                      text-primary
+                      placeholder:text-secondary
+                      focus:border-accentBlue/40
+                      focus:outline-none
+                      disabled:opacity-60
+                    "
+                  />
+                )}
+
+                {addingType === "image" && (
+                  <div>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      disabled={addingInProgress}
+                      onChange={(e) =>
+                        setFileValue(e.target.files?.[0] || null)
+                      }
+                      className="
+                        block
+                        w-full
+                        text-xs
+                        text-secondary
+                        file:mr-3
+                        file:rounded-lg
+                        file:border-0
+                        file:bg-background
+                        file:px-3
+                        file:py-2
+                        file:text-xs
+                        file:font-medium
+                        file:text-primary
+                        hover:file:bg-background/80
+                        disabled:opacity-60
+                      "
+                    />
+
+                    {fileValue && (
+                      <p className="mt-2 truncate text-xs text-secondary">
+                        {fileValue.name} ·{" "}
+                        {(fileValue.size / 1024).toFixed(0)} KB
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {addingError && (
+                  <p className="mt-2 text-xs text-accentRed">
+                    {addingError}
+                  </p>
+                )}
+
+                <div className="mt-3 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={addingInProgress}
+                    onClick={resetAdding}
+                    className="
+                      rounded-lg
+                      border
+                      border-border
+                      bg-background/40
+                      px-3
+                      py-1.5
+                      text-xs
+                      font-medium
+                      text-secondary
+                      transition-colors
+                      hover:bg-background
+                      disabled:opacity-50
+                    "
+                  >
+                    Отмена
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={addingInProgress}
+                    onClick={handleAddConfirm}
+                    className="
+                      flex
+                      items-center
+                      gap-1.5
+                      rounded-lg
+                      bg-accentBlue
+                      px-3
+                      py-1.5
+                      text-xs
+                      font-semibold
+                      text-white
+                      transition-colors
+                      hover:bg-accentBlue/90
+                      disabled:opacity-50
+                    "
+                  >
+                    {addingInProgress ? (
+                      <>
+                        <FiRefreshCw
+                          size={12}
+                          className="animate-spin"
+                        />
+                        Отправка
+                      </>
+                    ) : (
+                      "Добавить"
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {evidence.length > 0 && (
+              <div className="mt-3 space-y-2">
+                {evidence.map((ev) => (
+                  <EvidenceListItem key={ev.id} evidence={ev} />
+                ))}
+              </div>
+            )}
+
+            {evidence.length === 0 && !addingType && (
+              <p className="mt-3 text-xs text-secondary">
+                Добавьте хотя бы одно доказательство, чтобы отправить на
+                проверку AI.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ACTIONS */}
+        <div className="mt-6 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={onClose}
+            className="
+              rounded-xl
+              border
+              border-border
+              bg-background/40
+              px-4
+              py-3
+              text-sm
+              font-medium
+              text-secondary
+              transition-colors
+              hover:bg-background
+              hover:text-primary
+              disabled:cursor-not-allowed
+              disabled:opacity-50
+            "
+          >
+            ОТМЕНА
+          </button>
+
+          <button
+            type="button"
+            disabled={!canSubmit}
+            onClick={() => onSubmit(completionMode)}
+            className="
+              flex
+              items-center
+              justify-center
+              gap-2
+              rounded-xl
+              bg-accentBlue
+              px-4
+              py-3
+              text-sm
+              font-semibold
+              text-white
+              transition-colors
+              hover:bg-accentBlue/90
+              disabled:cursor-not-allowed
+              disabled:opacity-40
+            "
+          >
+            {loading ? (
+              <>
+                <FiRefreshCw size={15} className="animate-spin" />
+                ОБРАБОТКА
+              </>
+            ) : (
+              <>
+                <FiCheckCircle size={15} />
+                ЗАВЕРШИТЬ
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EvidenceAddButton({ icon, label, active, disabled, onClick }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`
+        flex
+        items-center
+        justify-center
+        gap-1.5
+        rounded-lg
+        border
+        px-2
+        py-2
+        text-xs
+        font-medium
+        transition-all
+        ${active
+          ? "border-accentBlue/40 bg-accentBlue/10 text-accentBlue"
+          : "border-border bg-background/40 text-secondary hover:border-accentBlue/20 hover:text-primary"
+        }
+        disabled:cursor-not-allowed
+        disabled:opacity-50
+      `}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function EvidenceListItem({ evidence }) {
+  let icon = <FiFileText size={13} />;
+  let preview = evidence.content || "";
+
+  if (evidence.type === "url") {
+    icon = <FiLink size={13} />;
+  } else if (evidence.type === "image") {
+    icon = <FiImage size={13} />;
+  }
+
+  return (
+    <div
+      className="
+        flex
+        items-center
+        gap-2.5
+        rounded-lg
+        border
+        border-border
+        bg-background/30
+        px-3
+        py-2
+      "
+    >
+      <div
+        className="
+          flex
+          h-7
+          w-7
+          shrink-0
+          items-center
+          justify-center
+          rounded-md
+          bg-background
+          text-secondary
+        "
+      >
+        {icon}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs text-primary">{preview}</p>
+        <p
+          className="
+            text-[10px]
+            uppercase
+            tracking-wider
+            text-secondary
+          "
+        >
+          {evidence.type}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* COMPLETION OPTION */
+/* ================================================================== */
+
+function CompletionOption({
+  selected,
+  disabled,
+  icon,
+  title,
+  description,
+  onClick,
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`
+        flex
+        w-full
+        items-center
+        gap-3
+        rounded-xl
+        border
+        px-4
+        py-3
+        text-left
+        transition-all
+        duration-150
+        ${selected
+          ? "border-accentBlue/40 bg-accentBlue/10"
+          : "border-border bg-background/30 hover:border-accentBlue/20 hover:bg-background/60"
+        }
+        disabled:cursor-not-allowed
+        disabled:opacity-50
+      `}
+      aria-pressed={selected}
+    >
+      <div
+        className={`
+          flex
+          h-9
+          w-9
+          shrink-0
+          items-center
+          justify-center
+          rounded-lg
+          ${selected
+            ? "bg-accentBlue/15 text-accentBlue"
+            : "bg-background text-secondary"
+          }
+        `}
+      >
+        {icon}
+      </div>
+
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-primary">
+          {title}
+        </p>
+
+        <p className="mt-0.5 text-xs text-secondary">
+          {description}
+        </p>
+      </div>
+    </button>
+  );
+}
+
+/* ================================================================== */
+/* SMALL UI COMPONENTS */
+/* ================================================================== */
+
+function CategoryBadge({ category }) {
+  return (
+    <div
+      className="
+        mt-3
+        inline-flex
+        items-center
+        gap-2
+        rounded-lg
+        border
+        border-accentBlue/15
+        bg-accentBlue/10
+        px-2.5
+        py-1.5
+      "
+    >
+      <FiBookOpen
+        size={12}
+        className="text-accentBlue"
+      />
+
+      <span
+        className="
+          text-[10px]
+          font-semibold
+          uppercase
+          tracking-[0.14em]
+          text-accentBlue
+        "
+      >
+        {category}
+      </span>
+    </div>
+  );
+}
+
+function MetaCard({ icon, label, value }) {
+  return (
+    <div
+      className="
+        rounded-xl
+        border
+        border-border
+        bg-background/40
+        px-4
+        py-3
+      "
+    >
+      <div className="flex items-center gap-2 text-secondary">
+        {icon}
+
+        <span
+          className="
+            text-[10px]
+            font-medium
+            uppercase
+            tracking-[0.14em]
+          "
+        >
+          {label}
+        </span>
+      </div>
+
+      <p
+        className="
+          mt-2
+          font-mono
+          text-sm
+          font-medium
+          text-primary
+        "
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* HELPERS */
+/* ================================================================== */
 
 function formatCurrentTime() {
   return new Intl.DateTimeFormat("ru-RU", {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date());
+}
+
+function formatElapsedTime(seconds) {
+  const safeSeconds = Math.max(
+    0,
+    Number(seconds) || 0
+  );
+
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor(
+    (safeSeconds % 3600) / 60
+  );
+  const secs = safeSeconds % 60;
+
+  const parts = [];
+
+  if (hours > 0) {
+    parts.push(String(hours).padStart(2, "0"));
+  }
+
+  parts.push(String(minutes).padStart(2, "0"));
+  parts.push(String(secs).padStart(2, "0"));
+
+  return parts.join(":");
 }
 
 function formatLessonType(type) {
@@ -1265,5 +2500,24 @@ function formatLessonType(type) {
 
     default:
       return type || "Занятие";
+  }
+}
+
+function formatVerificationStatus(status) {
+  switch (status) {
+    case "approved":
+      return "Подтверждено";
+
+    case "rejected":
+      return "Отклонено";
+
+    case "partial":
+      return "Частично";
+
+    case "pending":
+      return "На проверке";
+
+    default:
+      return "Не требуется";
   }
 }

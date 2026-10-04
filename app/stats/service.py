@@ -1,24 +1,17 @@
-from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Tuple, Set
+from typing import List, Optional, Set, Tuple
 
-from app.database.models import User, Lesson, ScheduleExclusion
+from sqlalchemy.orm import Session
+
 from app.common.schedule_filters import (
-    normalize_schedule_value,
-    normalize_schedule_category,
-    lesson_is_visible,
+    get_schedule_exclusions,
     lesson_is_excluded_by_category,
     lesson_is_excluded_by_subject,
-    get_schedule_exclusions,
+    lesson_is_visible,
+    normalize_schedule_category,
+    normalize_schedule_value,
 )
-
-
-
-
-
-
-
-
+from app.database.models import Lesson, ScheduleExclusion, User
 
 
 def get_semester_bounds(
@@ -143,7 +136,7 @@ def get_filtered_semester_lessons(
     """
 
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_msk_naive()
 
     bounds = get_semester_bounds(now)
 

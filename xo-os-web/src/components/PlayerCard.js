@@ -21,7 +21,7 @@ const PlayerCard = ({ user }) => {
   useEffect(() => {
     const loadStats = async () => {
       try {
-        const response = await fetch("/api/stats", {
+        const response = await fetch("/api/gamification/", {
           credentials: "include",
         });
 
@@ -33,9 +33,12 @@ const PlayerCard = ({ user }) => {
 
         setStats((prev) => ({
           ...prev,
-          ...data,
-          name: data.name || prev.name,
-          role: data.role || prev.role,
+          level: Number.isFinite(data.level) ? data.level : prev.level,
+          total_xp: Number.isFinite(data.total_xp)
+            ? data.total_xp
+            : prev.total_xp,
+          // name/role в gamification нет — оставляем как было,
+          // они подтянутся из пропа user во втором useEffect.
         }));
       } catch (error) {
         console.warn("Failed to fetch player stats:", error);
@@ -43,6 +46,19 @@ const PlayerCard = ({ user }) => {
     };
 
     loadStats();
+
+    const onGamificationUpdated = () => loadStats();
+    window.addEventListener(
+      "xo-os:gamification-updated",
+      onGamificationUpdated
+    );
+
+    return () => {
+      window.removeEventListener(
+        "xo-os:gamification-updated",
+        onGamificationUpdated
+      );
+    };
   }, []);
 
   /*
@@ -278,14 +294,13 @@ const PlayerCard = ({ user }) => {
                   <div
                     className={`
                       h-full rounded-full
-                      ${
-                        stat.accent === "blue"
-                          ? "bg-accent-blue"
-                          : stat.accent === "yellow"
+                      ${stat.accent === "blue"
+                        ? "bg-accent-blue"
+                        : stat.accent === "yellow"
                           ? "bg-accent-yellow"
                           : stat.accent === "green"
-                          ? "bg-accent-green"
-                          : "bg-accent-purple"
+                            ? "bg-accent-green"
+                            : "bg-accent-purple"
                       }
                     `}
                     style={{

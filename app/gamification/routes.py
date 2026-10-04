@@ -1,9 +1,16 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.database.db import db
 from app.auth.service import get_current_active_user
-from .service import get_gamification, update_gamification_settings, reset_gamification
+from app.database.db import db
+
+from .service import (
+    get_gamification as get_gamification_service,
+)
+from .service import (
+    reset_gamification,
+    update_gamification_settings,
+)
 
 router = APIRouter()
 
@@ -15,7 +22,7 @@ def get_gamification(current_user: User = Depends(get_current_active_user)):
     Это единственный источник истины для отображения геймификации интерфейса.
     """
     with db.session() as session:
-        return get_gamification(session, current_user)
+        return get_gamification_service(session, current_user)
 
 
 @router.put("/settings")
