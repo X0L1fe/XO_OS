@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import List, Optional, Protocol
 
-from sqlalchemy import select
-
+from app.common.time import utc_now
 from app.database.db import Database
 from app.database.models import Lesson, User, UserStats
 from app.ics.parser import LessonData, parse_ics
 from app.sync.diff import DiffResult, LessonChange, calculate_diff
+from sqlalchemy import select
 
 
 class GoogleCalendarServiceProtocol(Protocol):
@@ -183,7 +183,7 @@ class SyncService:
                 incoming_map.values(),
             )
 
-            now = _utc_now()
+            now = utc_now()
 
             # -------------------------------------------------
             # CREATED
@@ -464,7 +464,7 @@ class SyncService:
                 incoming_map.values(),
             )
 
-            now = _utc_now()
+            now = utc_now()
 
             # CREATED
             for change in diff.created:

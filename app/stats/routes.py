@@ -1,16 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.auth.service import get_current_active_user
+from app.common.time import msk_now_naive
 from app.database.db import db
 from app.database.models import Lesson, ScheduleExclusion, User, UserStats
-
-from .service import (
-    _as_aware_utc,
+from app.stats.service import (
     clipped_lesson_duration_hours,
     get_filtered_semester_lessons,
     get_schedule_exclusions,
@@ -22,17 +20,6 @@ from .service import (
 )
 
 router = APIRouter()
-MAI_TZ = ZoneInfo("Europe/Moscow")
-
-
-def now_msk_naive() -> datetime:
-    """
-    Текущее время в Europe/Moscow без tzinfo.
-
-    Совпадает с представлением Lesson.start_time / Lesson.end_time в БД
-    (naive MSK), чтобы сравнения работали.
-    """
-    return datetime.now(MAI_TZ).replace(tzinfo=None)
 
 
 @router.get("/semester")
@@ -43,7 +30,7 @@ def get_semester_stats(current_user: User = Depends(get_current_active_user)):
     Фильтры применяются перед расчетом.
     """
 
-    now = now_msk_naive()
+    now = msk_now_naive()
 
     with db.session() as session:
         result = get_filtered_semester_lessons(
@@ -121,7 +108,7 @@ def get_weekly_stats(current_user: User = Depends(get_current_active_user)):
     может отображать полную шкалу семестра.
     """
 
-    now = datetime.now(timezone.utc)
+    now = msk_now_naive()
 
     with db.session() as session:
         result = get_filtered_semester_lessons(
@@ -192,7 +179,7 @@ def get_top_subjects(current_user: User = Depends(get_current_active_user)):
     Фильтры применяются перед агрегацией.
     """
 
-    now = now_msk_naive()
+    now = msk_now_naive()
 
     with db.session() as session:
         result = get_filtered_semester_lessons(
@@ -257,7 +244,7 @@ def get_plan_fact(current_user: User = Depends(get_current_active_user)):
     осталось = часть еще впереди.
     """
 
-    now = datetime.now(MAI_TZ).replace(tzinfo=None)
+    now = msk_now_naive()
 
     with db.session() as session:
         result = get_filtered_semester_lessons(

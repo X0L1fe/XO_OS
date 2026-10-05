@@ -11,6 +11,7 @@ from app.common.schedule_filters import (
     normalize_schedule_category,
     normalize_schedule_value,
 )
+from app.common.time import msk_now_naive
 from app.database.models import Lesson, ScheduleExclusion, User
 
 
@@ -18,7 +19,10 @@ def get_semester_bounds(
     now: datetime,
 ) -> Optional[Tuple[datetime, datetime]]:
     """
-    Получение текущие границы академического семестра.
+    Получение текущих границ академического семестра.
+
+    Возвращает naive MSK-время, потому что Lesson.start_time / Lesson.end_time
+    в БД хранятся как naive MSK. Сравнения работают только в одной шкале.
 
     Текущее соглашение проекта:
         Весна-лето: 1 февраля – 31 мая.
@@ -29,52 +33,17 @@ def get_semester_bounds(
 
     if 2 <= now.month <= 6:
         return (
-            datetime(
-                now.year,
-                2,
-                1,
-                tzinfo=timezone.utc,
-            ),
-            datetime(
-                now.year,
-                5,
-                31,
-                23,
-                59,
-                59,
-                tzinfo=timezone.utc,
-            ),
+            datetime(now.year, 2, 1),
+            datetime(now.year, 5, 31, 23, 59, 59),
         )
 
     if 9 <= now.month <= 12:
         return (
-            datetime(
-                now.year,
-                9,
-                1,
-                tzinfo=timezone.utc,
-            ),
-            datetime(
-                now.year,
-                12,
-                31,
-                23,
-                59,
-                59,
-                tzinfo=timezone.utc,
-            ),
+            datetime(now.year, 9, 1),
+            datetime(now.year, 12, 31, 23, 59, 59),
         )
 
     return None
-
-
-def _as_aware_utc(value: datetime) -> datetime:
-    """
-    Нормализация времени к UTC формату для сравнения из БД
-    """
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
 
 def lesson_duration_hours(
@@ -87,8 +56,8 @@ def lesson_duration_hours(
     if not lesson.start_time or not lesson.end_time:
         return 0.0
 
-    start = _as_aware_utc(lesson.start_time)
-    end = _as_aware_utc(lesson.end_time)
+    start = lesson.start_time
+    end = lesson.end_time
 
     return max(
         (end - start).total_seconds() / 3600.0,
@@ -102,21 +71,13 @@ def clipped_lesson_duration_hours(
     end: datetime,
 ) -> float:
     """
-    Рассчитать только ту часть продолжительности урока, которая лежит
-    внутри [start, end].
+    Часть продолжительности урока, попавшая в интервал [start, end].
     """
-
     if not lesson.start_time or not lesson.end_time:
         return 0.0
 
-    lesson_start = _as_aware_utc(lesson.start_time)
-    lesson_end = _as_aware_utc(lesson.end_time)
-
-    bound_start = _as_aware_utc(start)
-    bound_end = _as_aware_utc(end)
-
-    clipped_start = max(lesson_start, bound_start)
-    clipped_end = min(lesson_end, bound_end)
+    clipped_start = max(lesson.start_time, start)
+    clipped_end = min(lesson.end_time, end)
 
     if clipped_end <= clipped_start:
         return 0.0
@@ -136,7 +97,7 @@ def get_filtered_semester_lessons(
     """
 
     if now is None:
-        now = now_msk_naive()
+        now = msk_now_naive()
 
     bounds = get_semester_bounds(now)
 

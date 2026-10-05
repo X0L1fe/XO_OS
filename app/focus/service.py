@@ -17,6 +17,7 @@ from app.common.schedule_filters import (
     lesson_is_visible,
     normalize_schedule_category,
 )
+from app.common.time import utc_now, msk_now_naive
 from app.database.models import (
     FocusEvidence,
     FocusSession,
@@ -29,9 +30,6 @@ from app.database.models import (
 
 # Import event publishing functions
 from app.event import publish_focus_updated, publish_gamification_updated
-from app.stats.routes import now_msk_naive
-
-MAI_TZ = ZoneInfo("Europe/Moscow")
 
 
 class FocusService:
@@ -64,7 +62,7 @@ class FocusService:
             lesson_id=current_lesson.id if current_lesson else None,
             goal_text=goal_text,
             status="active",
-            started_at=datetime.now(timezone.utc),
+            started_at=utc_now(),
         )
         self.db.add(new_session)
         self.db.commit()
@@ -95,7 +93,7 @@ class FocusService:
             # Already paused
             return session
 
-        session.paused_at = datetime.now(timezone.utc)
+        session.paused_at = utc_now()
         session.status = "paused"
         self.db.commit()
         self.db.refresh(session)
@@ -126,7 +124,7 @@ class FocusService:
             return session
 
         # Calculate the paused duration and add to total_paused_seconds
-        now = now_msk_naive()
+        now = utc_now()
         # Ensure session.paused_at is offset-aware in UTC
         if session.paused_at.tzinfo is None:
             paused_at = session.paused_at.replace(tzinfo=timezone.utc)
@@ -188,7 +186,7 @@ class FocusService:
                 )
 
         # Set ended_at and calculate duration
-        now = datetime.now(timezone.utc)
+        now = utc_now()
 
         if session.status == "paused" and session.paused_at:
             paused_at = session.paused_at
@@ -276,7 +274,7 @@ class FocusService:
             stats.level = new_level
 
         # Обновление серии: мы учитываем сегодняшнюю дату серии
-        today = datetime.now(timezone.utc).date()
+        today = utc_now().date()
         if stats.last_activity_date:
             last_activity_date = stats.last_activity_date.date()
             if today == last_activity_date:
@@ -358,7 +356,7 @@ class FocusService:
         Получите текущий видимый урок для пользователя на основе текущего времени и исключений расписания.
         Бэкенд определяет текущий урок — не доверяет входным данным фронтенда.
         """
-        now = datetime.now(MAI_TZ).replace(tzinfo=None)
+        now = msk_now_naive()
 
         # Get user's schedule exclusions
         excluded_categories, excluded_subjects = self._get_schedule_exclusions(user_id)
@@ -513,7 +511,7 @@ class FocusService:
             bonus_xp = int(verification_result.score * 10)  # 0-10
             total_xp = base_xp + bonus_xp
             session.xp_awarded = total_xp
-            # Награждает XP внутренним методом.
+            # Награжает XP внутренним методом.
             self._award_xp(user_id, total_xp, "focus_verified", session.id)
         else:
             # AI rejected evidence -> rejected, no XP

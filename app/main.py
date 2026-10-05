@@ -16,8 +16,8 @@ from app.common.schedule_filters import (
     lesson_is_visible,
     normalize_schedule_category,
 )
+from app.common.time import msk_now_naive, utc_now
 from app.focus.routes import _calculate_elapsed_seconds
-from app.stats.routes import now_msk_naive
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,6 @@ from app.mais_parser import (
 )
 from app.schedule import router as schedule_router
 from app.stats import router as stats_router
-from app.stats.service import _as_aware_utc
 from app.sync.service import SyncService
 from app.telegram.schemas import (
     TelegramLinkResponse,
@@ -156,7 +155,7 @@ db = Database()
 settings = Settings()
 # Obsidian vault path configuration
 OBSIDIAN_CONFIG_PATH = Path("data/obsidian_config.json")
-MAI_TZ = ZoneInfo("Europe/Moscow")
+
 # Server-Sent Events for real-time updates
 # We'll use a simple in-memory dictionary to track active connections
 # In a production app, you would use a proper message queue like Redis Pub/Sub
@@ -383,9 +382,7 @@ async def resend_verification(email: str = Body(..., embed=True)) -> Response:
             # Hash the token for storage (like we do with passwords)
             verification_token_hash = get_password_hash(verification_token)
             # Set expiration to 24 hours from now
-            verification_token_expires_at = datetime.now(timezone.utc) + timedelta(
-                hours=24
-            )
+            verification_token_expires_at = utc_now() + timedelta(hours=24)
 
             # Update user with new token
             db_user.verification_token_hash = verification_token_hash
@@ -714,7 +711,7 @@ def get_now(
     """
     with db.session() as session:
         focus_service = FocusService(session)
-        now = datetime.now(MAI_TZ).replace(tzinfo=None)
+        now = msk_now_naive()
 
         current_session = focus_service.get_current_session(user_id=current_user.id)
 
@@ -1434,7 +1431,7 @@ async def check_mais_schedule_for_user(user: User, session: Session) -> None:
         )
         # If we have a Google Calendar service, update the last synced time
         if google_calendar_service is not None:
-            user.last_synced_at = datetime.now(timezone.utc)
+            user.last_synced_at = utc_now()
         # Check if there are any changes
         has_changes = (
             result.created > 0
@@ -1511,7 +1508,7 @@ async def periodic_mais_check():
                     # Re-fetch the user in this session to get the latest state
                     user_db = session.query(User).filter(User.id == user.id).one()
                     # Check if we need to run the check
-                    now = datetime.now(timezone.utc)
+                    now = utc_now()
                     last_mais_check = user_db.last_mais_check
                     if last_mais_check is not None:
                         # Ensure last_mais_check is offset-aware in UTC for subtraction

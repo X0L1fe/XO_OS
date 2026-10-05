@@ -14,8 +14,8 @@ from app.common.schedule_filters import (
     normalize_schedule_category,
     normalize_schedule_value,
 )
+from app.common.time import msk_now_naive
 from app.database.models import Lesson, ScheduleExclusion, User
-from app.stats.routes import now_msk_naive
 
 
 class ScheduleService:
@@ -172,7 +172,7 @@ class ScheduleService:
         mode="today" — только сегодняшние занятия;
         mode="all"   — всё расписание пользователя.
         """
-        now = now_msk_naive()
+        now = msk_now_naive()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
 
