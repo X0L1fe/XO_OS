@@ -116,10 +116,10 @@ def cmd_import_ics(
         return 1
 
 
-def cmd_export(db: Database, vault: str) -> int:
+def cmd_export(db: Database, vault: str, *, user_id: int) -> int:
     """Export lessons to Obsidian."""
     try:
-        exported = SyncService(db).export_to_obsidian(vault)
+        exported = SyncService(db).export_to_obsidian(vault, user_id=user_id)
 
         print(f"Exported lessons: {exported}")
         print(f"Vault: {vault}")
@@ -220,6 +220,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to Obsidian vault",
     )
 
+    export_parser.add_argument(
+        "--user-id",
+        type=int,
+        required=True,
+        help="XO_OS user ID",
+    )
+
     # ========================================================
     # STATS
     # ========================================================
@@ -253,6 +260,7 @@ def main() -> int:
         return cmd_export(
             db,
             args.vault,
+            user_id=args.user_id,
         )
 
     if args.command == "stats":

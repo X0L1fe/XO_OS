@@ -23,8 +23,14 @@ from app.ai.verification import (
     get_ai_verification_service,
 )
 from app.auth.service import get_current_active_user, get_current_user
+from app.common.schedule_filters import (
+    get_schedule_exclusions,
+    lesson_is_visible,
+    normalize_schedule_category,
+)
+from app.common.time import msk_now_naive
 from app.database.db import db
-from app.database.models import FocusSession, User
+from app.database.models import FocusSession, Lesson, User
 from app.event import publish_focus_updated, publish_gamification_updated
 from app.focus.service import FocusService
 from app.focus.storage import delete_evidence_image, save_evidence_image
@@ -36,7 +42,7 @@ router = APIRouter(
 )
 
 
-@router.post("/start", status_code=status.HTTP_201_CREATED)
+@router.post("/focus/start", status_code=status.HTTP_201_CREATED)
 async def start_focus_session(
     goal_text: Optional[str] = None,
     current_user: User = Depends(get_current_active_user),
@@ -69,7 +75,7 @@ async def start_focus_session(
         }
 
 
-@router.post("/{session_id}/pause", status_code=status.HTTP_200_OK)
+@router.post("/focus/{session_id}/pause", status_code=status.HTTP_200_OK)
 async def pause_focus_session(
     session_id: int = Path(..., gt=0),
     current_user: User = Depends(get_current_active_user),
@@ -93,7 +99,7 @@ async def pause_focus_session(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.post("/{session_id}/resume", status_code=status.HTTP_200_OK)
+@router.post("/focus/{session_id}/resume", status_code=status.HTTP_200_OK)
 async def resume_focus_session(
     session_id: int = Path(..., gt=0),
     current_user: User = Depends(get_current_active_user),
@@ -117,7 +123,7 @@ async def resume_focus_session(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.post("/{session_id}/complete", status_code=status.HTTP_200_OK)
+@router.post("/focus/{session_id}/complete", status_code=status.HTTP_200_OK)
 async def complete_focus_session(
     session_id: int = Path(..., gt=0),
     completion_mode: str = Body("manual", embed=True),
@@ -314,7 +320,7 @@ async def _process_ai_verification(
         db_session.close()
 
 
-@router.get("/active", status_code=status.HTTP_200_OK)
+@router.get("/focus/active", status_code=status.HTTP_200_OK)
 async def get_active_focus_session(
     current_user: User = Depends(get_current_active_user),
 ):
@@ -337,7 +343,7 @@ async def get_active_focus_session(
         }
 
 
-@router.get("/{session_id}", status_code=status.HTTP_200_OK)
+@router.get("/focus/{session_id}", status_code=status.HTTP_200_OK)
 async def get_focus_session(
     session_id: int = Path(..., gt=0),
     current_user: User = Depends(get_current_active_user),
@@ -370,7 +376,7 @@ async def get_focus_session(
         }
 
 
-@router.post("/{session_id}/evidence", status_code=status.HTTP_200_OK)
+@router.post("/focus/{session_id}/evidence", status_code=status.HTTP_200_OK)
 async def add_evidence_to_focus_session(
     session_id: int = Path(..., gt=0),
     evidence_type: str = Form(..., alias="type"),
@@ -458,3 +464,116 @@ async def add_evidence_to_focus_session(
         if evidence_type == "image":
             delete_evidence_image(evidence["file_path"])
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/now")
+def get_now(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Верните текущее состояние NowBlock.
+    Это может быть:
+      - Активный или приостанавленны сеанс фокусировки (с подробностями)
+      - Текущий видимый урок (если есть), когда ни один сеанс фокусировки не активен.
+      - Состояние ожидания (нет урока, нет фокус-сессии)
+    """
+    with db.session() as session:
+        focus_service = FocusService(session)
+        now = msk_now_naive()
+
+        current_session = focus_service.get_current_session(user_id=current_user.id)
+
+        # Fallback: недавно завершённая сессия — показываем её 30 минут,
+        # чтобы пользователь увидел результат AI-проверки и начисленный XP.
+        if not current_session:
+            recent_cutoff = now - timedelta(minutes=30)
+            current_session = (
+                session.query(FocusSession)
+                .filter(
+                    FocusSession.user_id == current_user.id,
+                    FocusSession.status == "completed",
+                    FocusSession.ended_at.isnot(None),
+                    FocusSession.ended_at >= recent_cutoff,
+                )
+                .order_by(FocusSession.ended_at.desc())
+                .first()
+            )
+
+        if current_session:
+            elapsed_seconds = _calculate_elapsed_seconds(current_session)
+
+            lesson = None
+            if current_session.lesson_id:
+                lesson = (
+                    session.query(Lesson)
+                    .filter(Lesson.id == current_session.lesson_id)
+                    .first()
+                )
+
+            lesson_subject = lesson.subject if lesson else ""
+            lesson_description = lesson.description if lesson else ""
+
+            return {
+                "type": "focus",
+                "session_id": current_session.id,
+                "status": current_session.status,
+                "lesson_id": current_session.lesson_id,
+                "lesson_subject": lesson_subject,
+                "lesson_description": lesson_description,
+                "goal_text": current_session.goal_text,
+                "started_at": current_session.started_at,
+                "ended_at": current_session.ended_at,  # ← обязательно
+                "elapsed_seconds": elapsed_seconds,
+                "duration_seconds": current_session.duration_seconds,  # ← обязательно
+                "completion_mode": current_session.completion_mode,  # ← обязательно
+                "verification_status": current_session.verification_status,  # ← вот это
+                "xp_awarded": current_session.xp_awarded,  # ← и это
+                "evidence_provided": bool(current_session.evidence_provided),
+            }
+
+        # No active focus session, check for the current visible lesson
+        excluded_categories, excluded_subjects = get_schedule_exclusions(
+            session,
+            current_user.id,
+        )
+
+        lessons = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time <= now,
+                Lesson.end_time >= now,
+            )
+            .order_by(Lesson.start_time)
+            .all()
+        )
+
+        lesson = next(
+            (
+                item
+                for item in lessons
+                if lesson_is_visible(
+                    item,
+                    excluded_categories,
+                    excluded_subjects,
+                )
+            ),
+            None,
+        )
+
+        if lesson:
+            category = normalize_schedule_category(lesson.category)
+            return {
+                "type": "lesson",
+                "lesson_id": lesson.id,
+                "lesson_subject": lesson.subject or "",
+                "lesson_description": lesson.description or "",
+                "time_estimate": (
+                    f"{lesson.start_time.strftime('%H:%M')} - "
+                    f"{lesson.end_time.strftime('%H:%M')}"
+                ),
+                "category": category,
+            }
+
+        # No active focus session and no current lesson
+        return {"type": "idle"}

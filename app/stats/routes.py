@@ -22,7 +22,7 @@ from app.stats.service import (
 router = APIRouter()
 
 
-@router.get("/semester")
+@router.get("/stats/semester")
 def get_semester_stats(current_user: User = Depends(get_current_active_user)):
     """
     Загрузка семестра в фактических часах.
@@ -99,7 +99,7 @@ def get_semester_stats(current_user: User = Depends(get_current_active_user)):
         }
 
 
-@router.get("/weekly")
+@router.get("/stats/weekly")
 def get_weekly_stats(current_user: User = Depends(get_current_active_user)):
     """
     Загруженность по каждой неделе текущего семестра.
@@ -171,7 +171,7 @@ def get_weekly_stats(current_user: User = Depends(get_current_active_user)):
         return weeks
 
 
-@router.get("/topsubjects")
+@router.get("/stats/topsubjects")
 def get_top_subjects(current_user: User = Depends(get_current_active_user)):
     """
     Лучшие предметы по фактической учебной нагрузке в семестре.
@@ -230,7 +230,7 @@ def get_top_subjects(current_user: User = Depends(get_current_active_user)):
         ]
 
 
-@router.get("/planfact")
+@router.get("/stats/planfact")
 def get_plan_fact(current_user: User = Depends(get_current_active_user)):
     """
     Ход семестра.
@@ -289,3 +289,39 @@ def get_plan_fact(current_user: User = Depends(get_current_active_user)):
                 1,
             ),
         }
+
+
+@router.get("/achievements")
+def get_achievements(current_user: User = Depends(get_current_active_user)):
+    """Get achievements based on stats."""
+    with db.session() as session:
+        stats = (
+            session.query(UserStats)
+            .filter(UserStats.user_id == current_user.id)
+            .first()
+        )
+        if not stats:
+            stats = UserStats(user_id=current_user.id)
+            session.add(stats)
+            session.commit()
+        achievements = []
+        # Streak achievements
+        if stats.current_streak >= 7:
+            achievements.append(f"Стаж {stats.current_streak} дней")
+        if stats.current_streak >= 30:
+            achievements.append(f"Стаж {stats.current_streak} дней")
+        # Level achievements
+        if stats.level >= 1:
+            achievements.append(f"Уровень {stats.level}")
+        if stats.level >= 5:
+            achievements.append(f"Уровень {stats.level}")
+        if stats.level >= 10:
+            achievements.append(f"Уровень {stats.level}")
+        # XP achievements
+        if stats.total_xp >= 1000:
+            achievements.append("Новичок")
+        if stats.total_xp >= 5000:
+            achievements.append("Опытный")
+        if stats.total_xp >= 10000:
+            achievements.append("Ветеран")
+        return {"achievements": achievements, "streak": stats.current_streak}

@@ -322,8 +322,8 @@ class SyncService:
             type_dir = os.path.join(vault_path, lesson_type_folder)
             os.makedirs(type_dir, exist_ok=True)
 
-            # Create a safe filename using the identity_key (which is already a hex string, safe for filenames)
-            filename = f"{lesson.identity_key}.md"
+            # Create a safe filename using the stable_id (which is already a hex string, safe for filenames)
+            filename = f"{lesson.stable_id}.md"
             file_path = os.path.join(type_dir, filename)
 
             # Prepare the markdown content

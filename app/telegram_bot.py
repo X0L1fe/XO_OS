@@ -66,6 +66,10 @@ RECEIVED_ICS_DIR = os.path.join(os.getcwd(), "data", "received_ics")
 os.makedirs(RECEIVED_ICS_DIR, exist_ok=True)
 db = Database()
 
+# Create the Telegram bot application instance (for webhook use)
+from telegram.ext import Application
+telegram_bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
 
 async def handle_link_code(
     update: Update,
