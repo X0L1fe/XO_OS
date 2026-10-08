@@ -81,35 +81,11 @@ app.include_router(debug_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
 app.include_router(mais_router, prefix="/api")
 
-# ============================================================
-# DEVELOPMENT ONLY: RESET GAMIFICATION
-# ============================================================
-
-
 # Serve static files (frontend) if directory exists
 frontend_dir = Path(__file__).parent / "web"
 if frontend_dir.is_dir():
     # We'll serve static files via a catch-all route below
     pass
-
-
-# API routes under /api prefix
-
-
-# Additional API routes
-
-
-# ============================================================
-# STATISTICS
-# ============================================================
-
-
-# ============================================================
-# TELEGRAM
-# ============================================================
-
-
-# Trigger reload
 
 
 # Startup event to launch the background task

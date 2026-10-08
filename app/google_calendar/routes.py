@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, Cookie, Depends, HTTPException, Query, Requ
 from fastapi.responses import RedirectResponse
 from typing import Optional
 import os
+from datetime import datetime, timezone
 
 from app.auth.service import get_current_active_user, get_current_user
 from app.config import Settings
@@ -11,6 +12,7 @@ from app.database.db import Database
 db = Database()
 from app.config import Settings
 settings = Settings()
+from app.database.models import GoogleCalendarConnection
 
 # Try to import Google Calendar service; if not available, set to None.
 try:
@@ -233,10 +235,81 @@ async def select_google_calendar(
 
         with db.session() as session:
             user = session.query(User).filter(User.id == current_user.id).one()
-            user.selected_calendar_id = calendar_id if calendar_id else None
+
+            # If calendar_id is None or empty, treat as clearing selection (for backward compatibility)
+            if not calendar_id:
+                user.selected_calendar_id = None
+                session.commit()
+                return {"status": "success"}
+
+            # Verify that the calendar exists in the user's Google Calendar list (if possible)
+            if GOOGLE_OAUTH_AVAILABLE:
+                try:
+                    token_path = get_token_path()
+                    if os.path.exists(token_path):
+                        service = get_google_calendar_service()
+                        calendar_list = service.calendarList().list().execute()
+                        calendar_ids = [cal["id"] for cal in calendar_list.get("items", [])]
+                        # Google's primary calendar may not be listed if user has no other calendars? Actually it is.
+                        # We'll allow "primary" always.
+                        if calendar_id != "primary" and calendar_id not in calendar_ids:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Calendar with ID '{calendar_id}' not found in your Google Calendar list.",
+                            )
+                except Exception as e:
+                    # If we cannot verify (e.g., token invalid), we still allow the selection to maintain
+                    # backward compatibility; the sync will fail later if token is invalid.
+                    pass
+
+            # Look for existing connection
+            connection = (
+                session.query(GoogleCalendarConnection)
+                .filter(
+                    GoogleCalendarConnection.user_id == user.id,
+                    GoogleCalendarConnection.calendar_id == calendar_id,
+                )
+                .first()
+            )
+            now = datetime.now(timezone.utc)
+            if connection:
+                # Ensure it's enabled
+                if not connection.enabled:
+                    connection.enabled = 1
+                # Do not update connected_at on reconnect
+            else:
+                # Create new connection
+                connection = GoogleCalendarConnection(
+                    user_id=user.id,
+                    calendar_id=calendar_id,
+                    connected_at=now,
+                    enabled=1,
+                )
+                session.add(connection)
+
+            # Update legacy field for backward compatibility
+            user.selected_calendar_id = calendar_id
+
             session.commit()
         return {"status": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to save calendar selection: {str(e)}"
         )
+
+
+@router.get("/calendar/connections")
+async def get_google_calendar_connections(current_user: User = Depends(get_current_active_user)):
+    """Get the user's Google Calendar connections."""
+    with db.session() as session:
+        connections = session.query(GoogleCalendarConnection).filter(GoogleCalendarConnection.user_id == current_user.id).all()
+        result = []
+        for conn in connections:
+            result.append({
+                "calendar_id": conn.calendar_id,
+                "enabled": bool(conn.enabled),
+                "connected_at": conn.connected_at.isoformat() if conn.connected_at else None,
+            })
+        return {"connections": result}
