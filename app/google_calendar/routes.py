@@ -1,22 +1,38 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Cookie, Depends, HTTPException, Query, Request, Response, status
-from fastapi.responses import RedirectResponse
-from typing import Optional
+import logging
 import os
 from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import (
+    APIRouter,
+    Body,
+    Cookie,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
+from fastapi.responses import RedirectResponse
 
 from app.auth.service import get_current_active_user, get_current_user
 from app.config import Settings
 from app.database.db import Database
+
+logger = logging.getLogger(__name__)
 db = Database()
 from app.config import Settings
+
 settings = Settings()
-from app.database.models import GoogleCalendarConnection
+from app.database.models import GoogleCalendarConnection, User
 
 # Try to import Google Calendar service; if not available, set to None.
 try:
     from google_auth_oauthlib.flow import Flow
+
     from app.google_calendar.auth import (
         SCOPES,
         get_credentials_path,
@@ -140,8 +156,8 @@ async def google_status(current_user: User = Depends(get_current_user)):
     try:
         token_path = get_token_path()
         if os.path.exists(token_path):
-            from google.oauth2.credentials import Credentials
             from google.auth.transport.requests import Request
+            from google.oauth2.credentials import Credentials
 
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
             if creds and creds.valid:
@@ -242,6 +258,8 @@ async def select_google_calendar(
                 session.commit()
                 return {"status": "success"}
 
+            verification_warning: str | None = None
+
             # Verify that the calendar exists in the user's Google Calendar list (if possible)
             if GOOGLE_OAUTH_AVAILABLE:
                 try:
@@ -249,7 +267,9 @@ async def select_google_calendar(
                     if os.path.exists(token_path):
                         service = get_google_calendar_service()
                         calendar_list = service.calendarList().list().execute()
-                        calendar_ids = [cal["id"] for cal in calendar_list.get("items", [])]
+                        calendar_ids = [
+                            cal["id"] for cal in calendar_list.get("items", [])
+                        ]
                         # Google's primary calendar may not be listed if user has no other calendars? Actually it is.
                         # We'll allow "primary" always.
                         if calendar_id != "primary" and calendar_id not in calendar_ids:
@@ -257,10 +277,24 @@ async def select_google_calendar(
                                 status_code=400,
                                 detail=f"Calendar with ID '{calendar_id}' not found in your Google Calendar list.",
                             )
+                except HTTPException:
+                    # 400 про "не найден" должен дойти до клиента как есть,
+                    # а не превратиться в 500 или в тихий 200.
+                    raise
                 except Exception as e:
-                    # If we cannot verify (e.g., token invalid), we still allow the selection to maintain
-                    # backward compatibility; the sync will fail later if token is invalid.
-                    pass
+                    # Сеть/токен/квоты — не блокируем сохранение, но говорим об этом.
+                    logger.warning(
+                        "Failed to verify calendar %r for user %s: %s: %s",
+                        calendar_id,
+                        current_user.id,
+                        type(e).__name__,
+                        e,
+                    )
+                    verification_warning = (
+                        f"Настройка сохранена, но проверить календарь в Google "
+                        f"не удалось: {type(e).__name__}. "
+                        f"Проверьте авторизацию Google и повторите позже."
+                    )
 
             # Look for existing connection
             connection = (
@@ -291,25 +325,45 @@ async def select_google_calendar(
             user.selected_calendar_id = calendar_id
 
             session.commit()
-        return {"status": "success"}
+
+        response: dict = {"status": "success"}
+        if verification_warning:
+            response["warning"] = verification_warning
+        return response
+
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception(
+            "Unexpected error in select_google_calendar for user %s",
+            current_user.id,
+        )
         raise HTTPException(
-            status_code=500, detail=f"Failed to save calendar selection: {str(e)}"
+            status_code=500,
+            detail=f"Failed to save calendar selection: {str(e)}",
         )
 
 
 @router.get("/calendar/connections")
-async def get_google_calendar_connections(current_user: User = Depends(get_current_active_user)):
+async def get_google_calendar_connections(
+    current_user: User = Depends(get_current_active_user),
+):
     """Get the user's Google Calendar connections."""
     with db.session() as session:
-        connections = session.query(GoogleCalendarConnection).filter(GoogleCalendarConnection.user_id == current_user.id).all()
+        connections = (
+            session.query(GoogleCalendarConnection)
+            .filter(GoogleCalendarConnection.user_id == current_user.id)
+            .all()
+        )
         result = []
         for conn in connections:
-            result.append({
-                "calendar_id": conn.calendar_id,
-                "enabled": bool(conn.enabled),
-                "connected_at": conn.connected_at.isoformat() if conn.connected_at else None,
-            })
+            result.append(
+                {
+                    "calendar_id": conn.calendar_id,
+                    "enabled": bool(conn.enabled),
+                    "connected_at": conn.connected_at.isoformat()
+                    if conn.connected_at
+                    else None,
+                }
+            )
         return {"connections": result}

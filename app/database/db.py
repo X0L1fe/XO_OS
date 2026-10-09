@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
@@ -20,7 +20,11 @@ class Database:
         )
         self.engine = create_engine(self.url, connect_args=connect_args)
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
-        Base.metadata.create_all(self.engine)
+        inspector = inspect(self.engine)
+        if "alembic_version" not in inspector.get_table_names():
+            raise RuntimeError(
+                "База данных не инициализирована. Запусти: alembic upgrade head"
+            )
 
     def session(self):
         return self.SessionLocal()
