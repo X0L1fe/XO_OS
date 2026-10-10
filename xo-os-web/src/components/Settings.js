@@ -12,8 +12,21 @@ import {
   FiExternalLink,
   FiSave,
   FiChevronRight,
+  FiChevronDown,
   FiXCircle,
+  FiDroplet,
 } from "react-icons/fi";
+
+const COLOR_OPTIONS = [
+  { key: "LECTURE", label: "Лекции (ЛК)" },
+  { key: "PRACTICE", label: "Практики (ПЗ)" },
+  { key: "LAB", label: "Лабораторные (ЛР)" },
+  { key: "EXAM", label: "Экзамены (Э)" },
+];
+const CUSTOM_SLOT_KEYS = [
+  "custom_1", "custom_2", "custom_3",
+  "custom_4", "custom_5", "custom_6",
+];
 
 const SectionIcon = ({ children, tone = "blue" }) => {
   const toneClasses = {
@@ -230,6 +243,18 @@ const SettingSection = ({
 
 const Settings = () => {
   // ============================================================
+  // GOOGLE CALENDAR COLOR
+  // ============================================================
+
+  const [palette, setPalette] = useState([]);
+  const [customColors, setCustomColors] = useState({});
+  const [lessonColors, setLessonColors] = useState({});
+  const [colorsSaving, setColorsSaving] = useState(false);
+  const [colorsError, setColorsError] = useState(null);
+  const [colorsSuccess, setColorsSuccess] = useState(false);
+  const [expandedColorType, setExpandedColorType] = useState(null);
+
+  // ============================================================
   // GOOGLE
   // ============================================================
 
@@ -279,6 +304,32 @@ const Settings = () => {
   const [telegramLoading, setTelegramLoading] = useState(false);
   const [telegramError, setTelegramError] = useState(null);
   const [telegramMessage, setTelegramMessage] = useState(null);
+
+  // ============================================================
+  // GOOGLE COLOR
+  // ============================================================
+
+  useEffect(() => {
+    if (!googleConnected) {
+      setLessonColors({});
+      setPalette([]);
+      setCustomColors({});
+      return;
+    }
+
+    Promise.all([
+      fetch("/api/google/colors", { credentials: "include" }).then(r => r.json()),
+      fetch("/api/google/colors/palette", { credentials: "include" }).then(r => r.json()),
+    ])
+      .then(([colorsData, paletteData]) => {
+        setLessonColors(colorsData.colors || {});
+        setPalette(paletteData.palette || []);
+        setCustomColors(paletteData.custom_colors || {});
+      })
+      .catch(() => { });
+  }, [googleConnected]);
+
+
 
   // ============================================================
   // GOOGLE STATUS
@@ -346,6 +397,10 @@ const Settings = () => {
         const data = await response.json();
 
         setCalendars(data.calendars || [{ id: "primary", summary: "Основной календарь" }]);
+
+        if (data.selected_calendar_id) {
+          setSelectedCalendar(data.selected_calendar_id);
+        }
         // If we don't have a selected calendar yet, keep it as null (no selection)
         // User must explicitly select a calendar
       } catch (err) {
@@ -530,9 +585,11 @@ const Settings = () => {
 
       const data = await response.json();
 
-      if (data.success) {
+      if (data.status === "success") {
         setCalendarSuccess(true);
-        // Optionally, show a success message
+        if (data.warning) {
+          setCalendarError(data.warning);  // покажем как предупреждение
+        }
       } else {
         throw new Error(data.message || "Не удалось сохранить выбор календаря");
       }
@@ -541,6 +598,44 @@ const Settings = () => {
       setCalendarError(err.message || "Не удалось сохранить выбор календаря");
     } finally {
       setCalendarLoading(false);
+    }
+  };
+
+  // ============================================================
+  // GOOGLE CALENDAR COLORS
+  // ============================================================
+
+  const handleColorsSave = async () => {
+    setColorsSaving(true);
+    setColorsError(null);
+    setColorsSuccess(false);
+
+    try {
+      const [r1, r2] = await Promise.all([
+        fetch("/api/google/colors", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ colors: lessonColors }),
+        }),
+        fetch("/api/google/colors/custom", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ custom_colors: customColors }),
+        }),
+      ]);
+
+      if (!r1.ok || !r2.ok) {
+        throw new Error(`HTTP ${r1.status} / ${r2.status}`);
+      }
+
+      setColorsSuccess(true);
+    } catch (err) {
+      console.error("Failed to save colors:", err);
+      setColorsError(err.message || "Не удалось сохранить цвета");
+    } finally {
+      setColorsSaving(false);
     }
   };
 
@@ -828,6 +923,251 @@ const Settings = () => {
       </SettingSection>
 
       {/* ======================================================
+          GOOGLE CALENDAR COLOR
+      ======================================================= */}
+      {googleConnected && (
+        <SettingSection
+          icon={
+            <SectionIcon tone="purple">
+              <FiCalendar className="h-5 w-5" />
+            </SectionIcon>
+          }
+          title="Цвета событий"
+          description="Настройте цвет каждого типа занятия в Google Calendar."
+        >
+          <div className="space-y-2">
+            {[
+              { key: "LECTURE", label: "Лекции (ЛК)" },
+              { key: "PRACTICE", label: "Практики (ПЗ)" },
+              { key: "LAB", label: "Лабораторные (ЛР)" },
+              { key: "EXAM", label: "Экзамены (Э)" },
+            ].map(({ key, label }) => {
+              const isOpen = expandedColorType === key;
+              const selectedColorId = lessonColors[key];
+              const selectedColor = selectedColorId?.startsWith("xo_os_")
+                ? palette.find((c) => `xo_os_${c.key}` === selectedColorId)
+                : null;
+
+              const selectedCustom = selectedColorId?.startsWith("custom_")
+                ? customColors[selectedColorId]
+                : null;
+
+              return (
+                <div
+                  key={key}
+                  className="overflow-hidden rounded-lg border border-border bg-background"
+                >
+                  {/* Заголовок строки — кликабельный */}
+                  <button
+                    type="button"
+                    onClick={() => setExpandedColorType(isOpen ? null : key)}
+                    className="
+                      flex w-full items-center justify-between gap-3
+                      px-4 py-3
+                      text-left
+                      transition-colors duration-150
+                      hover:bg-accent-blue/5
+                      focus:outline-none
+                    "
+                  >
+                    <span className="text-sm font-medium text-text-primary">
+                      {label}
+                    </span>
+
+                    <div className="flex items-center gap-3">
+                      {/* Выбранный цвет как кружок */}
+                      {(selectedColor || selectedCustom) ? (
+                        <div
+                          className="h-5 w-5 rounded-full border border-white/20"
+                          style={{
+                            backgroundColor: (selectedColor || selectedCustom).hex,
+                            boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.18)",
+                          }}
+                          title={selectedColor ? selectedColor.name : (selectedCustom.name || "Свой цвет")}
+                        />
+                      ) : (
+                        <div className="h-5 w-5 rounded-full border border-dashed border-border" />
+                      )}
+
+                      {/* Стрелка, крутится при раскрытии */}
+                      <FiChevronDown
+                        className={`
+                          h-4 w-4 text-text-muted
+                          transition-transform duration-200
+                          ${isOpen ? "rotate-180" : ""}
+                        `}
+                      />
+                    </div>
+                  </button>
+
+                  {/* Раскрывающийся блок с кружками */}
+                  <div
+                    className={`
+                      grid transition-[grid-template-rows,opacity] duration-300 ease-out
+                      ${isOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}
+                    `}
+                  >
+                    <div className="overflow-hidden">
+                      <div className="border-t border-border/40 px-4 py-4">
+
+                        <div className="grid grid-cols-6 gap-2">
+                          {/* 24 палитровых */}
+                          {palette.map((color) => {
+                            const value = `xo_os_${color.key}`;
+                            const selected = selectedColorId === value;
+                            return (
+                              <button
+                                key={color.key}
+                                type="button"
+                                title={color.name}
+                                onClick={() => setLessonColors({ ...lessonColors, [key]: value })}
+                                className={`
+                                  h-8 w-8 rounded-full border-2
+                                  transition-all duration-150
+                                  hover:scale-110
+                                  hover:shadow-[0_0_14px_rgba(255,255,255,0.85)]
+                                  focus:outline-none
+                                  ${selected ? "border-white ring-2 ring-white/40" : "border-transparent"}
+                                `}
+                                style={{
+                                  backgroundColor: color.hex,
+                                  boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.18)",
+                                }}
+                              />
+                            );
+                          })}
+
+                          {/* 6 кастомных слотов */}
+                          {CUSTOM_SLOT_KEYS.map((slot) => {
+                            const custom = customColors[slot];
+                            const selected = selectedColorId === slot;
+
+                            // Пустой слот: клик открывает пикер, после выбора цвет сразу назначается типу
+                            if (!custom) {
+                              return (
+                                <label
+                                  key={slot}
+                                  title="Добавить свой цвет"
+                                  className="relative flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border-2 border-dashed border-text-muted hover:scale-110 transition-all duration-150"
+                                >
+                                  <FiDroplet className="h-3.5 w-3.5 text-text-muted" />
+                                  <input
+                                    type="color"
+                                    defaultValue="#888888"
+                                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                    onChange={(e) => {
+                                      const hex = e.target.value;
+                                      setCustomColors({ ...customColors, [slot]: { hex, name: "" } });
+                                    }}
+                                  />
+                                </label>
+                              );
+                            }
+
+                            // Заполненный слот: большой круг — назначить, маленькая капля — редактировать HEX
+                            return (
+                              <div key={slot} className="relative h-8 w-8">
+                                <button
+                                  type="button"
+                                  title={custom.name || "Свой цвет"}
+                                  onClick={() => setLessonColors({ ...lessonColors, [key]: slot })}
+                                  className={`
+                                h-8 w-8 rounded-full border-2
+                                transition-all duration-150
+                                hover:scale-110
+                                hover:shadow-[0_0_14px_rgba(255,255,255,0.85)]
+                                focus:outline-none
+                                ${selected ? "border-white ring-2 ring-white/40" : "border-transparent"}
+                              `}
+                                  style={{
+                                    backgroundColor: custom.hex,
+                                    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.18)",
+                                  }}
+                                />
+
+                                <label
+                                  title="Изменить цвет"
+                                  className="
+                                absolute -right-0.5 -bottom-0.5
+                                flex h-3.5 w-3.5 cursor-pointer items-center justify-center
+                                rounded-full border border-border bg-background
+                                opacity-0 transition-opacity
+                                hover:opacity-100
+                              "
+                                >
+                                  <FiDroplet className="h-2 w-2 text-text-muted" />
+                                  <input
+                                    type="color"
+                                    value={custom.hex}
+                                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                    onChange={(e) =>
+                                      setCustomColors({
+                                        ...customColors,
+                                        [slot]: { ...custom, hex: e.target.value },
+                                      })
+                                    }
+                                  />
+                                </label>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Кнопка сброса */}
+                        <div className="mt-3 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setLessonColors({ ...lessonColors, [key]: null })
+                            }
+                            className="
+                            rounded-md px-3 py-1 text-[11px] font-medium
+                            text-text-muted
+                            transition-colors duration-150
+                            hover:bg-background hover:text-text-primary
+                          "
+                          >
+                            По умолчанию
+                          </button>
+                        </div>
+
+
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              {colorsSuccess && (
+                <StatusBadge type="success">
+                  <FiCheckCircle className="h-4 w-4" />
+                  Цвета сохранены
+                </StatusBadge>
+              )}
+              {colorsError && (
+                <StatusBadge type="error">
+                  <FiAlertCircle className="h-4 w-4" />
+                  {colorsError}
+                </StatusBadge>
+              )}
+            </div>
+
+            <PrimaryButton
+              onClick={handleColorsSave}
+              disabled={colorsSaving}
+              icon={FiSave}
+            >
+              {colorsSaving ? "Сохранение..." : "Сохранить"}
+            </PrimaryButton>
+          </div>
+        </SettingSection>
+      )}
+
+      {/* ======================================================
           GOOGLE CALENDAR SELECTION
       ======================================================= */}
       {googleConnected && (
@@ -865,13 +1205,14 @@ const Settings = () => {
                 Повторить
               </SecondaryButton>
             </div>
-          ) : calendarSuccess ? (
-            <StatusBadge type="success">
-              <FiCheckCircle className="h-4 w-4" />
-              Выбор календаря сохранён
-            </StatusBadge>
           ) : (
             <div className="space-y-4">
+              {calendarSuccess && (
+                <StatusBadge type="success">
+                  <FiCheckCircle className="h-4 w-4" />
+                  Выбор календаря сохранён
+                </StatusBadge>
+              )}
               <div>
                 <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-text-muted">
                   Доступные календари

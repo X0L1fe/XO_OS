@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     DateTime,
     ForeignKey,
@@ -129,6 +130,14 @@ class User(Base):
     ai_verification_enabled: Mapped[bool] = mapped_column(
         Integer,
         default=0,
+    )
+    lesson_colors: Mapped[Optional[dict]] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+    custom_colors: Mapped[Optional[dict]] = mapped_column(
+        JSON,
+        nullable=True,
     )
 
     notifications: Mapped[List["Notification"]] = relationship(
@@ -529,6 +538,10 @@ class Lesson(Base):
     )
     mais_group_id: Mapped[str | None] = mapped_column(
         String(255),
+        nullable=True,
+    )
+    last_color_value: Mapped[Optional[str]] = mapped_column(
+        String(64),
         nullable=True,
     )
 

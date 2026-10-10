@@ -6,12 +6,13 @@ import traceback
 from datetime import timezone
 from typing import Optional
 
+from sqlalchemy.orm import Session
+
 from app.common.time import utc_now
 from app.database.db import db
 from app.database.models import Notification, User
 from app.mais_parser import async_fetch_group_schedule, parse_mais_schedule
 from app.sync.service import SyncService
-from sqlalchemy.orm import Session
 
 # Try to import Google Calendar service; if not available, set to None.
 try:
@@ -54,8 +55,11 @@ async def check_mais_schedule_for_user(user: User, session: Session) -> None:
             google_calendar_service = None
 
         sync_service = SyncService(db, google_calendar_service=google_calendar_service)
-        result = sync_service.import_lesson_data(
-            lessons, user_id=user.id, mais_group_id=user.mais_group_id
+        result = await asyncio.to_thread(
+            sync_service.import_lesson_data,
+            lessons,
+            user_id=user.id,
+            mais_group_id=user.mais_group_id,
         )
         # If we have a Google Calendar service, update the last synced time
         if google_calendar_service is not None:
@@ -117,6 +121,7 @@ async def periodic_mais_check() -> None:
     Background task that periodically checks for MAIS schedule changes for all users.
     """
     interval = 3600  # seconds (1 hour)
+    await asyncio.sleep(30)
     while True:
         try:
             # Get all users that have a mais_group_id and notifications enabled
