@@ -4,13 +4,15 @@ import logging
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from googleapiclient.errors import HttpError
 
 from app.database.db import Database
 from app.database.models import (
+    CalendarSwitchLock,
+    CalendarSwitchProgress,
     GoogleCalendarConnection,
     GoogleCalendarEvent,
     Lesson,
@@ -18,12 +20,11 @@ from app.database.models import (
 )
 from app.google_calendar.auth import get_google_calendar_service
 from app.google_calendar.labels import (
-    CUSTOM_SLOT_KEYS,
     build_all_labels,
     resolve_event_label_id,
 )
 from app.ics.parser import LessonData
-from app.sync.diff import DiffResult, LessonChange
+from app.sync.diff import DiffResult
 
 logger = logging.getLogger(__name__)
 
@@ -1102,3 +1103,386 @@ class GoogleCalendarSyncService:
 
         print(f"[SYNC] Обновлено: {updated}, пропущено (уже правильные): {skipped}")
         return updated
+
+    @classmethod
+    def switch_calendar_for_user(
+        cls,
+        db: Database,
+        user_id: int,
+        source_calendar_id: str,
+        target_calendar_id: str,
+    ) -> int:
+        """
+        Фоновая задача для переключения календаря — переносит события уроков
+        из source в target календарь через events.move.
+        Обрабатывает каждый урок в отдельной транзакции.
+        Проверяет актуальность операции перед выполнением.
+        """
+        try:
+            with db.session() as session:
+                user = session.query(User).filter(User.id == user_id).first()
+                if not user:
+                    logger.warning(f"User {user_id} not found, aborting switch task")
+                    return 0
+
+                if user.selected_calendar_id != target_calendar_id:
+                    logger.info(
+                        f"Switch task for user {user_id} from {source_calendar_id} "
+                        f"to {target_calendar_id} is no longer relevant "
+                        f"(user selected calendar: {user.selected_calendar_id})"
+                    )
+                    return 0
+
+                source_connection = (
+                    session.query(GoogleCalendarConnection)
+                    .filter(
+                        GoogleCalendarConnection.user_id == user_id,
+                        GoogleCalendarConnection.calendar_id == source_calendar_id,
+                    )
+                    .first()
+                )
+                target_connection = (
+                    session.query(GoogleCalendarConnection)
+                    .filter(
+                        GoogleCalendarConnection.user_id == user_id,
+                        GoogleCalendarConnection.calendar_id == target_calendar_id,
+                    )
+                    .first()
+                )
+
+                if not source_connection or not target_connection:
+                    logger.warning(
+                        f"Missing connections for user {user_id}: "
+                        f"source={source_connection is not None}, "
+                        f"target={target_connection is not None}"
+                    )
+                    return 0
+
+            svc = cls(db, calendar_id=target_calendar_id, user_id=user_id)
+
+            # Регистрируем метки в target-календаре, чтобы события с
+            # eventLabelId корректно переносились
+            svc.ensure_labels_registered()
+
+            with db.session() as session:
+                source_connection = (
+                    session.query(GoogleCalendarConnection)
+                    .filter(
+                        GoogleCalendarConnection.user_id == user_id,
+                        GoogleCalendarConnection.calendar_id == source_calendar_id,
+                    )
+                    .first()
+                )
+                target_connection = (
+                    session.query(GoogleCalendarConnection)
+                    .filter(
+                        GoogleCalendarConnection.user_id == user_id,
+                        GoogleCalendarConnection.calendar_id == target_calendar_id,
+                    )
+                    .first()
+                )
+
+                if not source_connection or not target_connection:
+                    logger.error(
+                        f"Missing connections for user {user_id}: "
+                        f"source={source_connection is not None}, "
+                        f"target={target_connection is not None}"
+                    )
+                    return 0
+
+                # Ищем уроки пользователя, у которых уже есть событие в Google.
+                # Без JOIN с google_calendar_events — таблица может быть пуста,
+                # если pull-синхронизация ещё не запускалась.
+                lessons = (
+                    session.query(Lesson)
+                    .filter(
+                        Lesson.user_id == user_id,
+                        Lesson.google_event_id.isnot(None),
+                    )
+                    .all()
+                )
+
+                logger.info(
+                    f"Found {len(lessons)} lessons to switch for user {user_id} "
+                    f"from {source_calendar_id} to {target_calendar_id}"
+                )
+
+                # Ищем имена календарей для отображения в UI
+                source_calendar_name = None
+                target_calendar_name = None
+                try:
+                    service = get_google_calendar_service()
+                    cal_list = service.calendarList().list().execute()
+                    for cal in cal_list.get("items", []):
+                        if cal["id"] == source_calendar_id:
+                            source_calendar_name = cal.get("summary")
+                        if cal["id"] == target_calendar_id:
+                            target_calendar_name = cal.get("summary")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch calendar names: {e}")
+
+                # Создаём запись прогресса
+                with db.session() as progress_session:
+                    # Удаляем старые незавершённые записи для этого пользователя
+                    progress_session.query(CalendarSwitchProgress).filter(
+                        CalendarSwitchProgress.user_id == user_id,
+                    ).delete()
+
+                    progress = CalendarSwitchProgress(
+                        user_id=user_id,
+                        source_calendar_id=source_calendar_id,
+                        target_calendar_id=target_calendar_id,
+                        source_calendar_name=source_calendar_name,
+                        target_calendar_name=target_calendar_name,
+                        total=len(lessons),
+                        processed=0,
+                        status="running",
+                    )
+                    progress_session.add(progress)
+                    progress_session.commit()
+                    progress_id = progress.id
+
+                processed_count = 0
+                for lesson in lessons:
+                    try:
+                        with db.session() as lesson_session:
+                            lesson_to_process = (
+                                lesson_session.query(Lesson)
+                                .filter(Lesson.id == lesson.id)
+                                .with_for_update()
+                                .first()
+                            )
+                            if not lesson_to_process:
+                                continue
+
+                            source_service = get_google_calendar_service()
+
+                            # Проверяем, есть ли событие в source-календаре.
+                            # events.move при отсутствии вернёт 404 — но лучше
+                            # проверить заранее, чтобы не терять урок в цикле.
+                            source_event = None
+                            try:
+                                source_event = (
+                                    source_service.events()
+                                    .get(
+                                        calendarId=source_calendar_id,
+                                        eventId=lesson_to_process.google_event_id,
+                                    )
+                                    .execute()
+                                )
+                            except HttpError as e:
+                                if e.resp.status != 404:
+                                    logger.warning(
+                                        f"Failed to fetch event "
+                                        f"{lesson_to_process.google_event_id} "
+                                        f"from source: {e}"
+                                    )
+
+                            if source_event is not None:
+                                # Переносим событие через events.move.
+                                # id события сохраняется — lesson.google_event_id
+                                # остаётся прежним.
+                                logger.info(
+                                    f"Before move: event {lesson_to_process.google_event_id} "
+                                    f"colorId={source_event.get('colorId')} "
+                                    f"eventLabelId={source_event.get('eventLabelId')}"
+                                )
+                                source_service.events().move(
+                                    calendarId=source_calendar_id,
+                                    eventId=lesson_to_process.google_event_id,
+                                    destination=target_calendar_id,
+                                    sendUpdates="none",
+                                ).execute()
+
+                                # events.move меняет организатора события → eventLabelId
+                                # сбрасывается (метки привязаны к организатору).
+                                # Поэтому после move надо вернуть метку отдельным patch-ом.
+                                # Цвет берём не из source_event (там его может не быть),
+                                # а из локальных настроек пользователя.
+                                target_color_body = {}
+
+                                lesson_color_value = svc.color_overrides.get(
+                                    lesson_to_process.lesson_type
+                                )
+                                resolved = resolve_event_label_id(lesson_color_value)
+                                if resolved is not None:
+                                    field, val = resolved
+                                    target_color_body[field] = val
+
+                                if target_color_body:
+                                    try:
+                                        source_service.events().patch(
+                                            calendarId=target_calendar_id,
+                                            eventId=lesson_to_process.google_event_id,
+                                            body=target_color_body,
+                                            eventLabelVersion=1,
+                                        ).execute()
+                                        logger.info(
+                                            f"Restored color on event {lesson_to_process.google_event_id}: "
+                                            f"{target_color_body}"
+                                        )
+                                    except HttpError as e:
+                                        logger.error(
+                                            f"Failed to set color on event "
+                                            f"{lesson_to_process.google_event_id}: {e}"
+                                        )
+
+                                logger.info(
+                                    f"Moved lesson {lesson.id} "
+                                    f"(event {lesson_to_process.google_event_id}) "
+                                    f"to target calendar {target_calendar_id}"
+                                )
+                            else:
+                                # События нет в source — создаём новое в target
+                                google_event_body = _lesson_to_google_event(
+                                    lesson_to_process, svc.color_overrides
+                                )
+                                created_event = (
+                                    source_service.events()
+                                    .insert(
+                                        calendarId=target_calendar_id,
+                                        body=google_event_body,
+                                        eventLabelVersion=1,
+                                    )
+                                    .execute()
+                                )
+                                lesson_to_process.google_event_id = created_event.get(
+                                    "id"
+                                )
+                                logger.info(
+                                    f"Created new event for lesson {lesson.id} "
+                                    f"in target calendar {target_calendar_id}"
+                                )
+
+                            # Обновляем привязку в google_calendar_events, если запись есть.
+                            # google_event_id не меняется (при move) — только connection_id/calendar_id.
+                            if source_event is not None:
+                                event_record = (
+                                    lesson_session.query(GoogleCalendarEvent)
+                                    .filter(
+                                        GoogleCalendarEvent.google_event_id
+                                        == lesson_to_process.google_event_id,
+                                        GoogleCalendarEvent.connection_id
+                                        == source_connection.id,
+                                    )
+                                    .with_for_update()
+                                    .first()
+                                )
+                                if event_record:
+                                    event_record.connection_id = target_connection.id
+                                    event_record.calendar_id = target_calendar_id
+
+                            lesson_session.commit()
+                            processed_count += 1
+                            # Обновляем прогресс
+                            try:
+                                with db.session() as p_session:
+                                    p = (
+                                        p_session.query(CalendarSwitchProgress)
+                                        .filter(
+                                            CalendarSwitchProgress.id == progress_id
+                                        )
+                                        .with_for_update()
+                                        .first()
+                                    )
+                                    if p:
+                                        p.processed = processed_count
+                                        p_session.commit()
+                            except Exception as e:
+                                logger.warning(f"Failed to update progress: {e}")
+
+                            # Создаём уведомление о завершении переноса
+                            try:
+                                with db.session() as notif_session:
+                                    from app.database.models import Notification
+
+                                    notif = Notification(
+                                        user_id=user_id,
+                                        title="Перенос календаря завершён",
+                                        message=(
+                                            f"Перенесено {processed_count} из {len(lessons)} событий "
+                                            f"из «{source_calendar_name or 'старого'}» в "
+                                            f"«{target_calendar_name or 'нового'}»."
+                                        ),
+                                        type="calendar_switch",
+                                    )
+                                    notif_session.add(notif)
+                                    notif_session.commit()
+                            except Exception as e:
+                                logger.warning(f"Failed to create notification: {e}")
+
+                    except Exception as e:
+                        logger.error(f"Failed to switch lesson {lesson.id}: {e}")
+                        continue
+
+                logger.info(
+                    f"Completed switching {processed_count} of {len(lessons)} "
+                    f"lessons for user {user_id}"
+                )
+                # Помечаем как завершённый
+                try:
+                    with db.session() as p_session:
+                        p = (
+                            p_session.query(CalendarSwitchProgress)
+                            .filter(CalendarSwitchProgress.id == progress_id)
+                            .first()
+                        )
+                        if p:
+                            p.status = "completed"
+                            p.finished_at = datetime.now(timezone.utc)
+                            p_session.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to finalize progress: {e}")
+
+                try:
+                    with db.session() as notif_session:
+                        from app.database.models import Notification
+
+                        notif = Notification(
+                            user_id=user_id,
+                            title="Ошибка переноса календаря",
+                            message=str(e)[:200],
+                            type="calendar_switch_error",
+                        )
+                        notif_session.add(notif)
+                        notif_session.commit()
+                except Exception:
+                    pass
+
+                return processed_count
+
+        except Exception as e:
+            logger.exception(f"switch_calendar_for_user failed for user {user_id}: {e}")
+            try:
+                with db.session() as p_session:
+                    p = (
+                        p_session.query(CalendarSwitchProgress)
+                        .filter(CalendarSwitchProgress.id == progress_id)
+                        .first()
+                    )
+                    if p:
+                        p.status = "failed"
+                        p.error_message = str(e)[:500]
+                        p.finished_at = datetime.now(timezone.utc)
+                        p_session.commit()
+            except Exception:
+                pass
+
+            return 0
+
+        finally:
+            # Снимаем lock, независимо от результата
+            try:
+                from app.database.models import CalendarSwitchLock
+
+                with db.session() as cleanup_session:
+                    deleted = (
+                        cleanup_session.query(CalendarSwitchLock)
+                        .filter(CalendarSwitchLock.user_id == user_id)
+                        .delete()
+                    )
+                    cleanup_session.commit()
+                    if deleted:
+                        logger.info(f"Released switch lock for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to release switch lock for user {user_id}: {e}")

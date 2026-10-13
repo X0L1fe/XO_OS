@@ -4,33 +4,25 @@ import logging
 import os
 import re as _re
 from datetime import datetime, timezone
-from typing import Optional
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Body,
-    Cookie,
-    Depends,
-    HTTPException,
-    Query,
-    Request,
-    Response,
-    status,
-)
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from app.auth.service import get_current_active_user, get_current_user
 from app.config import Settings
 from app.database.db import Database
+from app.database.models import (
+    CalendarSwitchLock,
+    CalendarSwitchProgress,
+    GoogleCalendarConnection,
+    User,
+)
 from app.google_calendar.labels import CUSTOM_SLOT_KEYS, PALETTE_COLORS
+from app.google_calendar.service import GoogleCalendarSyncService
 
 logger = logging.getLogger(__name__)
 db = Database()
-from app.config import Settings
-
 settings = Settings()
-from app.database.models import GoogleCalendarConnection, User
 
 # Try to import Google Calendar service; if not available, set to None.
 try:
@@ -42,7 +34,6 @@ try:
         get_google_calendar_service,
         get_token_path,
     )
-    from app.google_calendar.service import GoogleCalendarSyncService
 
     GOOGLE_OAUTH_AVAILABLE = True
 except ImportError:
@@ -303,9 +294,11 @@ async def select_google_calendar(
                 session.commit()
                 return {"status": "success"}
 
-            verification_warning: str | None = None
+            # Store the old selected calendar ID for switch detection
+            old_selected_calendar_id = user.selected_calendar_id
 
             # Verify that the calendar exists in the user's Google Calendar list (if possible)
+            verification_warning: str | None = None
             if GOOGLE_OAUTH_AVAILABLE:
                 try:
                     token_path = get_token_path()
@@ -333,7 +326,7 @@ async def select_google_calendar(
                         calendar_id,
                         current_user.id,
                         type(e).__name__,
-                        e,
+                        str(e),
                     )
                     verification_warning = (
                         f"Настройка сохранена, но проверить календарь в Google "
@@ -341,8 +334,8 @@ async def select_google_calendar(
                         f"Проверьте авторизацию Google и повторите позже."
                     )
 
-            # Look for existing connection
-            connection = (
+            # Look for existing connection for the new calendar
+            new_connection = (
                 session.query(GoogleCalendarConnection)
                 .filter(
                     GoogleCalendarConnection.user_id == user.id,
@@ -351,20 +344,20 @@ async def select_google_calendar(
                 .first()
             )
             now = datetime.now(timezone.utc)
-            if connection:
+            if new_connection:
                 # Ensure it's enabled
-                if not connection.enabled:
-                    connection.enabled = 1
+                if not new_connection.enabled:
+                    new_connection.enabled = 1
                 # Do not update connected_at on reconnect
             else:
                 # Create new connection
-                connection = GoogleCalendarConnection(
+                new_connection = GoogleCalendarConnection(
                     user_id=user.id,
                     calendar_id=calendar_id,
                     connected_at=now,
                     enabled=1,
                 )
-                session.add(connection)
+                session.add(new_connection)
 
             # Update legacy field for backward compatibility
             user.selected_calendar_id = calendar_id
@@ -372,17 +365,84 @@ async def select_google_calendar(
             session.commit()
             user_id = user.id  # ← сохрани id до выхода из with
 
-            # Dispatch в фон: сайт ответит сразу, sync пойдёт после ответа
-        background_tasks.add_task(
-            GoogleCalendarSyncService.initial_sync_for_user,
-            db,
-            user_id,
-            calendar_id,
-        )
-        response: dict = {"status": "success"}
-        if verification_warning:
-            response["warning"] = verification_warning
-        return response
+            # Determine if we need to switch calendars or just do initial sync
+            needs_switch = False
+            old_connection = None
+
+            # If there was an old selected calendar and it's different from the new one
+            if old_selected_calendar_id and old_selected_calendar_id != calendar_id:
+                # Look for existing connection for the old calendar
+                with db.session() as session:
+                    old_connection = (
+                        session.query(GoogleCalendarConnection)
+                        .filter(
+                            GoogleCalendarConnection.user_id == user.id,
+                            GoogleCalendarConnection.calendar_id
+                            == old_selected_calendar_id,
+                        )
+                        .first()
+                    )
+                    # If we have a connection for the old calendar, we need to switch
+                    if old_connection:
+                        needs_switch = True
+
+            # Dispatch appropriate background task
+            if needs_switch and old_connection:
+                # Attempt to acquire lock for calendar switching
+                lock_acquired = False
+                try:
+                    # Try to create a lock record - this will fail if lock already exists due to unique constraint
+                    lock_record = CalendarSwitchLock(
+                        user_id=user_id,
+                        locked_at=now,
+                    )
+                    session.add(lock_record)
+                    session.commit()
+                    lock_acquired = True
+                    logger.info(f"Acquired switch lock for user {user_id}")
+                except Exception:
+                    # Lock already exists or other error
+                    logger.warning(f"Failed to acquire switch lock for user {user_id}")
+                    lock_acquired = False
+
+                if lock_acquired and GoogleCalendarSyncService is not None:
+                    # Successfully acquired lock and service available, start switch task
+                    # Assert for type checker: old_selected_calendar_id is not None here due to checks above
+                    assert old_selected_calendar_id is not None
+                    background_tasks.add_task(
+                        GoogleCalendarSyncService.switch_calendar_for_user,
+                        db,
+                        user_id,
+                        old_selected_calendar_id,
+                        calendar_id,
+                    )
+                    response: dict = {"status": "success", "switch_initiated": True}
+                elif lock_acquired:
+                    # Lock acquired but service not available (Google OAuth not available)
+                    logger.warning(
+                        "GoogleCalendarSyncService is None, no tasks will be run"
+                    )
+                    response: dict = {"status": "success"}
+                else:
+                    # Failed to acquire lock - do not initiate any task, user can try again later
+                    logger.info(
+                        f"Switch lock not acquired for user {user_id}, no task initiated"
+                    )
+                    response: dict = {"status": "success"}
+            else:
+                # No switch needed, just initial sync
+                if GoogleCalendarSyncService is not None:
+                    background_tasks.add_task(
+                        GoogleCalendarSyncService.initial_sync_for_user,
+                        db,
+                        user_id,
+                        calendar_id,
+                    )
+                response: dict = {"status": "success"}
+
+            if verification_warning:
+                response["warning"] = verification_warning
+            return response
 
     except HTTPException:
         raise
@@ -461,7 +521,7 @@ async def set_lesson_colors(
             #   1. id метки из нашей палитры (xo_os_mango)
             #   2. кастомный HEX (#ff00ff)
             # Числовые colorId (1-11) — устаревший формат, не принимаем
-            if value in ALLOWED_PALETTE_IDS or HEX_COLOR_RE.match(value):
+            if value in ALLOWED_PALETTE_IDS or _HEX_RE.match(value):
                 cleaned[key] = value
 
         with db.session() as session:
@@ -554,3 +614,41 @@ async def set_custom_colors(
     except Exception as e:
         logger.exception("Failed to set custom colors for user %s", current_user.id)
         raise HTTPException(500, f"Failed to save custom colors: {e}")
+
+
+@router.get("/calendar/switch-progress")
+async def get_switch_progress(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Возвращает текущий или последний завершённый прогресс переноса
+    событий между календарями.
+    """
+    with db.session() as session:
+        progress = (
+            session.query(CalendarSwitchProgress)
+            .filter(CalendarSwitchProgress.user_id == current_user.id)
+            .order_by(CalendarSwitchProgress.started_at.desc())
+            .first()
+        )
+        if not progress:
+            return {"active": False}
+
+        return {
+            "active": progress.status == "running",
+            "status": progress.status,
+            "source_calendar_id": progress.source_calendar_id,
+            "target_calendar_id": progress.target_calendar_id,
+            "source_calendar_name": progress.source_calendar_name,
+            "target_calendar_name": progress.target_calendar_name,
+            "total": progress.total,
+            "processed": progress.processed,
+            "percent": (
+                int(progress.processed * 100 / progress.total) if progress.total else 0
+            ),
+            "error_message": progress.error_message,
+            "started_at": progress.started_at.isoformat(),
+            "finished_at": (
+                progress.finished_at.isoformat() if progress.finished_at else None
+            ),
+        }

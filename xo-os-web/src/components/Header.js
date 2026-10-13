@@ -1,18 +1,63 @@
 import React, { useEffect, useState } from 'react';
 import { AiOutlineLogout, AiOutlineSearch } from 'react-icons/ai';
+import NotificationBell from './NotificationBell';
 
 export default function Header({ onLogout }) {
   const [user, setUser] = useState(null);
-  const [syncStatus, setSyncStatus] = useState('Синхронизировано');
-  const [lastCheck, setLastCheck] = useState('сегодня 14:32');
   const [online, setOnline] = useState(false);
+  const [switchProgress, setSwitchProgress] = useState(null);
+  const [showCompleted, setShowCompleted] = useState(false);
+
+  useEffect(() => {
+    let stopped = false;
+    let pollInterval = null;
+    let hideTimeout = null;
+
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        const resp = await fetch("/api/google/calendar/switch-progress", {
+          credentials: "include",
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        if (!data.active && data.status !== "completed" && data.status !== "failed") {
+          setSwitchProgress(null);
+          return;
+        }
+
+        setSwitchProgress(data);
+
+        if (data.status === "completed" || data.status === "failed") {
+          // Показываем финальное состояние 5 секунд и скрываем
+          setShowCompleted(true);
+          clearInterval(pollInterval);
+          hideTimeout = setTimeout(() => {
+            setSwitchProgress(null);
+            setShowCompleted(false);
+          }, 5000);
+        }
+      } catch (e) {
+        // тихо игнорируем сетевые ошибки
+      }
+    };
+
+    // Проверяем сразу при монтировании
+    poll();
+    pollInterval = setInterval(poll, 1500);
+
+    return () => {
+      stopped = true;
+      if (pollInterval) clearInterval(pollInterval);
+      if (hideTimeout) clearTimeout(hideTimeout);
+    };
+  }, []);
 
   useEffect(() => {
     const fetchUser = async () => {
       try {
-        const resp = await fetch('/api/auth/me', {
-          credentials: 'include'
-        });
+        const resp = await fetch('/api/auth/me', { credentials: 'include' });
         if (resp.ok) {
           const data = await resp.json();
           if (data.authenticated) {
@@ -24,29 +69,18 @@ export default function Header({ onLogout }) {
       }
     };
 
-    const fetchStatus = async () => {
+    const checkHealth = async () => {
       try {
-        const syncResp = await fetch('/api/google/status', { credentials: 'include' });
-        if (syncResp.ok) {
-          const syncData = await syncResp.json();
-          setSyncStatus(syncData.connected ? 'Синхронизировано' : 'Не синхронизировано');
-        }
-        const onlineResp = await fetch('/api/health', { credentials: 'include' });
-        if (onlineResp.ok) {
-          setOnline(true);
-        } else {
-          setOnline(false);
-        }
-        // Update last check time
-        setLastCheck(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+        const resp = await fetch('/api/health', { credentials: 'include' });
+        setOnline(resp.ok);
       } catch (e) {
-        console.error('Failed to fetch status', e);
+        setOnline(false);
       }
     };
 
     fetchUser();
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 30000);
+    checkHealth();
+    const interval = setInterval(checkHealth, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -66,8 +100,74 @@ export default function Header({ onLogout }) {
     return null; // или показывать гостя
   }
 
+  const SwitchProgressToast = ({ data }) => {
+    if (!data) return null;
+
+    const percent = data.percent || 0;
+    const isCompleted = data.status === "completed";
+    const isFailed = data.status === "failed";
+
+    const sourceName = data.source_calendar_name || "календаря";
+    const targetName = data.target_calendar_name || "календарь";
+
+    let label;
+    if (isCompleted) {
+      label = `Перенос событий из ${sourceName} в ${targetName} завершён`;
+    } else if (isFailed) {
+      label = `Ошибка переноса: ${data.error_message || "неизвестно"}`;
+    } else {
+      label = `Перенос событий из ${sourceName} в ${targetName} готов на`;
+    }
+
+    return (
+      <div
+        className="
+          fixed top-20 right-6 z-50
+          w-96 rounded-2xl
+          border border-border
+          bg-panel
+          px-5 py-4
+          shadow-lg
+          transition-all duration-300
+        "
+      >
+        <div className="text-sm font-medium text-text-primary">
+          {label}
+        </div>
+
+        {!isFailed && (
+          <>
+            <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-border">
+              <div
+                className={`
+                  h-full rounded-full
+                  transition-all duration-500 ease-out
+                  ${isCompleted ? "bg-accentGreen" : "bg-accentBlue"}
+                `}
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+
+            <div className="mt-1.5 flex justify-between text-xs text-text-muted">
+              <span>
+                {data.processed} из {data.total}
+              </span>
+              <span className="font-mono">{percent}%</span>
+            </div>
+          </>
+        )}
+
+        {isFailed && (
+          <div className="mt-2 text-xs text-accentRed">
+            {data.error_message || "Не удалось завершить перенос"}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <header className="bg-panel/80 backdrop-blur-sm border-b border-border/50 relative">
+    <header className="bg-panel/80 backdrop-blur-sm border-b border-border/50 relative z-40">
       <div className="px-6 py-4 flex items-center justify-between">
         {/* Левая часть - поиск как системное поле ввода */}
         <div className="flex items-center space-x-3 flex-1 max-w-2xl">
@@ -88,22 +188,12 @@ export default function Header({ onLogout }) {
 
         {/* Правая часть - статус и пользователь в компактном виде */}
         <div className="flex items-center space-x-6">
-          {/* Статус синхронизации */}
-          <div className="flex items-center space-x-2 text-xs">
-            <span className="w-2.5 h-2.5 bg-accentGreen/20 rounded">
-              <span className="w-1.5 h-1.5 bg-accentGreen rounded mx-auto mt-0.5" />
-            </span>
-            <span className="whitespace-nowrap">{syncStatus}</span>
-          </div>
-
-          {/* Время последней проверки */}
-          <div className="flex items-center space-x-2 text-xs">
-            <span className="text-secondary/60">Последняя проверка:</span>
-            <span className="whitespace-nowrap font-mono">{lastCheck}</span>
-          </div>
-
           {/* Область пользователя как профиль/статус */}
           <div className="relative flex items-center space-x-3">
+
+            {/* Уведомления */}
+            <NotificationBell />
+
             {/* Аватар/инициалы пользователя */}
             <div className="w-8 h-8 bg-accentBlue/20 rounded-xl flex items-center justify-center">
               {user.name ? (
@@ -140,10 +230,29 @@ export default function Header({ onLogout }) {
               <span>{online ? 'Онлайн' : 'Офлайн'}</span>
             </div>
 
-            <div className="flex items-center space-x-2 text-xs cursor-pointer hover:text-accentBlue transition-colors duration-200" onClick={handleLogoutClick}>
-              <AiOutlineLogout className="h-4 w-4 text-secondary/60" />
+            <button
+              type="button"
+              onClick={handleLogoutClick}
+              className="
+                group flex items-center space-x-2 text-xs
+                cursor-pointer
+                rounded-lg px-2 py-1
+                text-secondary
+                transition-all duration-200
+                hover:bg-accentRed/10
+                hover:text-accentRed
+              "
+            >
+              <AiOutlineLogout
+                className="
+                  h-4 w-4
+                  text-secondary/60
+                  transition-colors duration-200
+                  group-hover:text-accentRed
+                "
+              />
               <span className="ml-1">Выход</span>
-            </div>
+            </button>
           </div>
         </div>
       </div>

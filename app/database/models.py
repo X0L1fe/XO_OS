@@ -755,3 +755,88 @@ class XPTransaction(Base):
     )
 
     user: Mapped["User"] = relationship()
+
+
+class CalendarSwitchLock(Base):
+    __tablename__ = "calendar_switch_locks"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    locked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=datetime.now(timezone.utc),
+    )
+
+    user: Mapped["User"] = relationship()
+
+
+class CalendarSwitchProgress(Base):
+    __tablename__ = "calendar_switch_progress"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    source_calendar_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+    target_calendar_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+    source_calendar_name: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    target_calendar_name: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    total: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    processed: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    # running | completed | failed
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="running",
+        nullable=False,
+    )
+    error_message: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )

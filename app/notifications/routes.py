@@ -76,3 +76,69 @@ async def toggle_notifications_enabled(
         user.notifications_enabled = not user.notifications_enabled
         session.commit()
         return {"enabled": bool(user.notifications_enabled)}
+
+
+@router.get("/unread-count")
+async def get_unread_count(
+    current_user: User = Depends(get_current_active_user),
+) -> dict:
+    """Возвращает количество непрочитанных уведомлений."""
+    with db.session() as session:
+        count = (
+            session.query(Notification)
+            .filter(
+                Notification.user_id == current_user.id,
+                Notification.is_read == 0,
+            )
+            .count()
+        )
+        return {"count": count}
+
+
+@router.post("/read-all")
+async def mark_all_as_read(
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, bool]:
+    """Помечает все уведомления пользователя прочитанными."""
+    with db.session() as session:
+        session.query(Notification).filter(
+            Notification.user_id == current_user.id,
+            Notification.is_read == 0,
+        ).update({"is_read": 1})
+        session.commit()
+        return {"success": True}
+
+
+@router.delete("/notifications")
+async def delete_all_notifications(
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, bool]:
+    """Удаляет ВСЕ уведомления пользователя."""
+    with db.session() as session:
+        session.query(Notification).filter(
+            Notification.user_id == current_user.id,
+        ).delete()
+        session.commit()
+        return {"success": True}
+
+
+@router.delete("/notifications/{notification_id}")
+async def delete_notification(
+    notification_id: int,
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, bool]:
+    """Удаляет уведомление пользователя."""
+    with db.session() as session:
+        notification = (
+            session.query(Notification)
+            .filter(
+                Notification.id == notification_id,
+                Notification.user_id == current_user.id,
+            )
+            .first()
+        )
+        if not notification:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        session.delete(notification)
+        session.commit()
+        return {"success": True}
