@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Form, HTTPException
-from app.mais_parser import fetch_groups, fetch_group_schedule, parse_mais_schedule
+
 from app.auth.service import get_current_active_user
-from app.database.models import User
 from app.database.db import db
+from app.database.models import User
 from app.google_calendar.service import GoogleCalendarSyncService
+from app.mais_parser import fetch_group_schedule, fetch_groups, parse_mais_schedule
 from app.sync.service import SyncService
 
 router = APIRouter()
@@ -82,6 +83,27 @@ def set_mais_group(
         user.onboarding_completed = True
         session.commit()
     return {"status": "success", "group": group_name}
+
+
+@router.get("/mais/current-group")
+def get_current_mais_group(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Возвращает MAIS-группу, выбранную текущим пользователем.
+    """
+    if not current_user.mais_group_id:
+        return {
+            "group": None,
+            "group_id": None,
+            "has_group": False,
+        }
+
+    return {
+        "group": current_user.mais_group_id,  # для обратной совместимости
+        "group_id": current_user.mais_group_id,
+        "has_group": True,
+    }
 
 
 @router.get("/mais/import_get")

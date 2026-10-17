@@ -9,6 +9,10 @@ from zoneinfo import ZoneInfo
 
 from googleapiclient.errors import HttpError
 
+from app.common.schedule_filters import (
+    get_schedule_exclusions,
+    lesson_is_visible,
+)
 from app.database.db import Database
 from app.database.models import (
     CalendarSwitchLock,
@@ -322,6 +326,10 @@ class GoogleCalendarSyncService:
         """
         Отправляет локальные изменения (created/updated/moved/deleted)
         в Google Calendar. Это "push" часть синхронизации.
+
+        Занятия, исключённые фильтрами расписания пользователя, в Google
+        не отправляются. Если занятие стало исключённым после того, как уже
+        было добавлено в календарь — событие удаляется.
         """
         try:
             service = get_google_calendar_service()
@@ -329,10 +337,19 @@ class GoogleCalendarSyncService:
             print(f"[SYNC] Не удалось аутентифицироваться в Google: {e}")
             return
 
+        # Загружаем исключения пользователя один раз на всю операцию.
+        with self.db.session() as session:
+            excluded_categories, excluded_subjects = get_schedule_exclusions(
+                session, self.user_id
+            )
+
+        # ------------------------------------------------------------------
         # CREATED — создаём события в Google для новых уроков
+        # ------------------------------------------------------------------
         for change in diff.created:
             if change.new is None:
                 continue
+
             with self.db.session() as session:
                 lesson_db = (
                     session.query(Lesson)
@@ -342,8 +359,17 @@ class GoogleCalendarSyncService:
                     )
                     .first()
                 )
+
                 if lesson_db is None or lesson_db.google_event_id:
                     continue
+
+                # ─── Пропускаем исключённые занятия ───
+                if not lesson_is_visible(
+                    lesson_db, excluded_categories, excluded_subjects
+                ):
+                    print(f"[SYNC] Пропуск (исключено фильтрами): {lesson_db.subject}")
+                    continue
+
                 try:
                     event = _lesson_to_google_event(lesson_db, self.color_overrides)
                     created = (
@@ -351,7 +377,7 @@ class GoogleCalendarSyncService:
                         .insert(
                             calendarId=self.calendar_id,
                             body=event,
-                            eventLabelVersion=1,  # Цвета по HEX
+                            eventLabelVersion=1,
                         )
                         .execute()
                     )
@@ -362,17 +388,21 @@ class GoogleCalendarSyncService:
                     lesson_db.last_synced_content_hash = lesson_db.content_hash
                     session.commit()
                     print(
-                        f"[SYNC] Создано событие Google {lesson_db.google_event_id} для {lesson_db.subject}"
+                        f"[SYNC] Создано событие Google {lesson_db.google_event_id} "
+                        f"для {lesson_db.subject}"
                     )
                 except Exception as e:
                     print(
                         f"[SYNC] Не удалось создать событие для {lesson_db.subject}: {e}"
                     )
 
+        # ------------------------------------------------------------------
         # UPDATED и MOVED — обновляем существующие события
+        # ------------------------------------------------------------------
         for change in list(diff.updated) + list(diff.moved):
             if change.old is None:
                 continue
+
             with self.db.session() as session:
                 lesson_db = (
                     session.query(Lesson)
@@ -382,8 +412,71 @@ class GoogleCalendarSyncService:
                     )
                     .first()
                 )
-                if lesson_db is None or not lesson_db.google_event_id:
+
+                if lesson_db is None:
                     continue
+
+                is_visible = lesson_is_visible(
+                    lesson_db, excluded_categories, excluded_subjects
+                )
+
+                # ─── Урок исключён, но был в Google → удаляем событие ───
+                if not is_visible:
+                    if lesson_db.google_event_id:
+                        try:
+                            service.events().delete(
+                                calendarId=self.calendar_id,
+                                eventId=lesson_db.google_event_id,
+                            ).execute()
+                            print(
+                                f"[SYNC] Удалено из Google "
+                                f"(стало исключением): {lesson_db.subject}"
+                            )
+                        except Exception as e:
+                            print(
+                                f"[SYNC] Не удалось удалить исключённый урок "
+                                f"{lesson_db.subject}: {e}"
+                            )
+                        # В любом случае развязываем связь — при возврате
+                        # фильтра создадим заново.
+                        lesson_db.google_event_id = None
+                        lesson_db.last_color_value = None
+                        lesson_db.last_synced_at = None
+                        lesson_db.last_synced_content_hash = None
+                        session.commit()
+                    continue
+
+                # ─── Урок виден, но ещё не в Google → создаём ───
+                if not lesson_db.google_event_id:
+                    try:
+                        event = _lesson_to_google_event(lesson_db, self.color_overrides)
+                        created = (
+                            service.events()
+                            .insert(
+                                calendarId=self.calendar_id,
+                                body=event,
+                                eventLabelVersion=1,
+                            )
+                            .execute()
+                        )
+                        lesson_db.google_event_id = created.get("id")
+                        color_val = event.get("eventLabelId") or event.get("colorId")
+                        lesson_db.last_color_value = color_val
+                        lesson_db.last_synced_at = datetime.now(timezone.utc)
+                        lesson_db.last_synced_content_hash = lesson_db.content_hash
+                        session.commit()
+                        print(
+                            f"[SYNC] Восстановлено событие Google "
+                            f"{lesson_db.google_event_id} для {lesson_db.subject}"
+                        )
+                    except Exception as e:
+                        print(
+                            f"[SYNC] Не удалось создать событие "
+                            f"для {lesson_db.subject}: {e}"
+                        )
+                    continue
+
+                # ─── Обычное обновление ───
                 try:
                     event = _lesson_to_google_event(lesson_db, self.color_overrides)
                     service.events().update(
@@ -396,18 +489,21 @@ class GoogleCalendarSyncService:
                     lesson_db.last_synced_content_hash = lesson_db.content_hash
                     session.commit()
                     print(
-                        f"[SYNC] Обновлено событие Google {lesson_db.google_event_id} для {lesson_db.subject}"
+                        f"[SYNC] Обновлено событие Google "
+                        f"{lesson_db.google_event_id} для {lesson_db.subject}"
                     )
                 except Exception as e:
                     print(
-                        f"[SYNC] Не удалось обновить событие для {lesson_db.subject}: {e}"
+                        f"[SYNC] Не удалось обновить событие "
+                        f"для {lesson_db.subject}: {e}"
                     )
 
-        # DELETED — удаляем события из Google
+        # ------------------------------------------------------------------
+        # DELETED — без изменений
+        # ------------------------------------------------------------------
         for change in diff.deleted:
             if change.old is None:
                 continue
-            # change.old — уже удалён из БД, но google_event_id доступен из памяти
             google_event_id = change.old.google_event_id
             if not google_event_id:
                 continue
@@ -1486,3 +1582,70 @@ class GoogleCalendarSyncService:
                         logger.info(f"Released switch lock for user {user_id}")
             except Exception as e:
                 logger.warning(f"Failed to release switch lock for user {user_id}: {e}")
+
+    def sync_after_filter_change(self) -> None:
+        """
+        После изменения фильтров:
+        - удалить из Google события исключённых занятий;
+        - создать события для занятий, которые снова стали видимыми
+            (у них google_event_id is None, но они в расписании).
+        """
+        try:
+            service = get_google_calendar_service()
+        except Exception as e:
+            print(f"[SYNC] Не удалось аутентифицироваться в Google: {e}")
+            return
+
+        with self.db.session() as session:
+            excluded_categories, excluded_subjects = get_schedule_exclusions(
+                session, self.user_id
+            )
+
+            lessons = session.query(Lesson).filter(Lesson.user_id == self.user_id).all()
+
+            for lesson in lessons:
+                is_visible = lesson_is_visible(
+                    lesson, excluded_categories, excluded_subjects
+                )
+
+                # Был в Google, стал исключён → удаляем
+                if not is_visible and lesson.google_event_id:
+                    try:
+                        service.events().delete(
+                            calendarId=self.calendar_id,
+                            eventId=lesson.google_event_id,
+                        ).execute()
+                        print(
+                            f"[SYNC] Удалено из Google "
+                            f"(исключено фильтром): {lesson.subject}"
+                        )
+                    except Exception as e:
+                        print(f"[SYNC] Не удалось удалить {lesson.subject}: {e}")
+                    lesson.google_event_id = None
+                    lesson.last_color_value = None
+                    lesson.last_synced_at = None
+                    lesson.last_synced_content_hash = None
+
+                # Виден, но не в Google → создаём
+                elif is_visible and not lesson.google_event_id:
+                    try:
+                        event = _lesson_to_google_event(lesson, self.color_overrides)
+                        created = (
+                            service.events()
+                            .insert(
+                                calendarId=self.calendar_id,
+                                body=event,
+                                eventLabelVersion=1,
+                            )
+                            .execute()
+                        )
+                        lesson.google_event_id = created.get("id")
+                        color_val = event.get("eventLabelId") or event.get("colorId")
+                        lesson.last_color_value = color_val
+                        lesson.last_synced_at = datetime.now(timezone.utc)
+                        lesson.last_synced_content_hash = lesson.content_hash
+                        print(f"[SYNC] Восстановлено в Google: {lesson.subject}")
+                    except Exception as e:
+                        print(f"[SYNC] Не удалось создать {lesson.subject}: {e}")
+
+            session.commit()

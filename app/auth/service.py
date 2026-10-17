@@ -18,6 +18,8 @@ from app.email.service import EmailService
 
 logger = logging.getLogger(__name__)
 
+MAX_SESSIONS_PER_USER = 10
+
 
 # На случай если bcrypt отвалится будет использоваться pbkdf2_sha256
 def _make_context() -> CryptContext:
@@ -184,15 +186,39 @@ def update_onboarding_completed(db: SQLAlchemySession, user_id: int) -> None:
     db.commit()
 
 
+MAX_SESSIONS_PER_USER = 10
+
+
 def create_session(
-    db: SQLAlchemySession, user_id: int, expires_delta: timedelta = timedelta(days=1)
+    db: SQLAlchemySession,
+    user_id: int,
+    expires_delta: timedelta = timedelta(days=1),
 ) -> AppSession:
-    # Удалите все существующие сеансы пользователя (чтобы сохранить только один сеанс для каждого пользователя).
-    db.query(AppSession).filter(AppSession.user_id == user_id).delete()
-    # Создать новый сеанс
+    # Удаляем протухшие сессии ЭТОГО пользователя
+    db.query(AppSession).filter(
+        AppSession.user_id == user_id,
+        AppSession.expires_at < datetime.now(timezone.utc),
+    ).delete(synchronize_session=False)
+
+    # Если сессий стало больше лимита — сносим самые старые
+    sessions = (
+        db.query(AppSession)
+        .filter(AppSession.user_id == user_id)
+        .order_by(AppSession.created_at.asc())
+        .all()
+    )
+    overflow = len(sessions) - (MAX_SESSIONS_PER_USER - 1)
+    for old in sessions[: max(0, overflow)]:
+        db.delete(old)
+
+    # Создаём новую
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + expires_delta
-    db_session = AppSession(user_id=user_id, token=token, expires_at=expires_at)
+    db_session = AppSession(
+        user_id=user_id,
+        token=token,
+        expires_at=expires_at,
+    )
     db.add(db_session)
     db.commit()
     db.refresh(db_session)
@@ -458,3 +484,14 @@ def confirm_email_change(
             return user
 
     return None
+
+
+def cleanup_expired_sessions(db: SQLAlchemySession) -> int:
+    """Удалить все протухшие сессии. Возвращает число удалённых."""
+    deleted = (
+        db.query(AppSession)
+        .filter(AppSession.expires_at < datetime.now(timezone.utc))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return deleted

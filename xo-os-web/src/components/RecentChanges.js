@@ -6,11 +6,6 @@ export default function RecentChanges() {
 
   useEffect(() => {
     // Placeholder: you can replace with actual API call
-    setChanges([
-      { time: 'Сегодня 14:20', description: 'Теория графов', change: 'Перенесено с 13:00 на 14:45' },
-      { time: 'Сегодня 11:05', description: 'Программирование', change: 'Создано новое занятие' },
-      { time: 'Вчера 09:32', description: 'Базы данных', change: 'Изменено время: 11:00 → 11:30' },
-    ]);
     setLoading(false);
   }, []);
 

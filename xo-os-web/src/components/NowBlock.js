@@ -41,6 +41,7 @@ const EMPTY_NOW = {
   ended_at: null,
   duration_seconds: null,
   evidence_provided: false,
+  can_start_new_session: true,
 };
 
 export default function NowBlock() {
@@ -412,7 +413,19 @@ export default function NowBlock() {
    */
 
   const handleStartFocus = async () => {
-    if (!beginAction()) {
+    if (!beginAction()) return;
+
+    /*
+     * Быстрая отсечка: если XP за это занятие уже начислен — не
+     * ходим на бэк, сразу показываем сообщение.
+     */
+    if (
+      now.type === "focus" &&
+      now.status === "completed" &&
+      Number(now.xp_awarded) > 0
+    ) {
+      showError("За это занятие XP уже получен — новая сессия недоступна.");
+      endAction();
       return;
     }
 
@@ -429,15 +442,47 @@ export default function NowBlock() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        /*
+         * Пытаемся вытащить осмысленное сообщение с бэка.
+         */
+        let detail = "";
+        try {
+          const errData = await response.json();
+          detail =
+            errData?.detail ||
+            errData?.message ||
+            "";
+        } catch {
+          /* ignore */
+        }
+
+        /*
+         * Отдельно обрабатываем случай, когда бэк говорит,
+         * что XP за это занятие уже начислен.
+         * FastAPI-стиль: 400 или 409.
+         */
+        const alreadyAwarded =
+          response.status === 409 ||
+          /already been awarded/i.test(detail);
+
+        if (alreadyAwarded) {
+          showError(
+            detail || "XP за это занятие уже начислен"
+          );
+
+          /*
+           * Синхронизируем состояние с бэком, чтобы UI
+           * показал completed + xp_awarded + verification_status.
+           */
+          await loadNow();
+          return;
+        }
+
+        throw new Error(detail || `HTTP ${response.status}`);
       }
 
       const data = await response.json();
 
-      /*
-       * Если backend возвращает session state —
-       * используем его напрямую.
-       */
       if (data && typeof data === "object") {
         const nextNow = {
           ...EMPTY_NOW,
@@ -446,9 +491,7 @@ export default function NowBlock() {
 
         setNow(nextNow);
 
-        const elapsed = Number(
-          nextNow.elapsed_seconds || 0
-        );
+        const elapsed = Number(nextNow.elapsed_seconds || 0);
 
         timerBaseSecondsRef.current = elapsed;
         setElapsedSeconds(elapsed);
@@ -463,17 +506,10 @@ export default function NowBlock() {
         }
       }
 
-      /*
-       * В любом случае синхронизируемся с /api/now.
-       */
       await loadNow();
     } catch (error) {
-      console.error(
-        "Failed to start focus session:",
-        error
-      );
-
-      showError("Не удалось начать фокус-сессию");
+      console.error("Failed to start focus session:", error);
+      showError(error.message || "Не удалось начать фокус-сессию");
     } finally {
       setLoading(false);
       endAction();
@@ -1339,35 +1375,55 @@ function LessonState({ now, onStart, disabled }) {
         </span>
       </div>
 
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onStart}
-        className="
-          mt-5
-          flex
-          w-full
-          items-center
-          justify-center
-          gap-2.5
-          rounded-xl
-          bg-accentBlue
-          px-4
-          py-3
-          text-sm
-          font-semibold
-          text-white
-          transition-all
-          duration-200
-          hover:bg-accentBlue/90
-          active:scale-[0.99]
-          disabled:cursor-not-allowed
-          disabled:opacity-50
-        "
-      >
-        <FiPlay size={15} />
-        НАЧАТЬ ФОКУС
-      </button>
+      {now.can_start_new_session !== false ? (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onStart}
+          className="
+            mt-5
+            flex
+            w-full
+            items-center
+            justify-center
+            gap-2.5
+            rounded-xl
+            bg-accentBlue
+            px-4
+            py-3
+            text-sm
+            font-semibold
+            text-white
+            transition-all
+            duration-200
+            hover:bg-accentBlue/90
+            active:scale-[0.99]
+            disabled:cursor-not-allowed
+            disabled:opacity-50
+          "
+        >
+          <FiPlay size={15} />
+          НАЧАТЬ ФОКУС
+        </button>
+      ) : (
+        <div
+          className="
+            mt-5
+            rounded-xl
+            border
+            border-border
+            bg-background/30
+            px-4
+            py-3
+            text-center
+            text-xs
+            text-secondary
+          "
+        >
+          За это занятие XP уже получен. Следующее занятие появится
+          автоматически.
+        </div>
+      )}
     </>
   );
 }
@@ -1636,16 +1692,16 @@ function FocusState({
           <div className="mt-5 space-y-3">
             <div
               className="
-              flex
-              items-center
-              justify-between
-              rounded-lg
-              border
-              border-accentGreen/20
-              bg-accentGreen/5
-              px-4
-              py-3
-            "
+                flex
+                items-center
+                justify-between
+                rounded-lg
+                border
+                border-accentGreen/20
+                bg-accentGreen/5
+                px-4
+                py-3
+              "
             >
               <div className="flex items-center gap-2">
                 <FiCheckCircle size={15} className="text-accentGreen" />
@@ -1666,32 +1722,47 @@ function FocusState({
               </div>
             </div>
 
-            <button
-              type="button"
-              disabled={loading}
-              onClick={onStart}
-              className="
-              flex
-              w-full
-              items-center
-              justify-center
-              gap-2
-              rounded-xl
-              bg-accentBlue
-              px-4
-              py-3
-              text-sm
-              font-semibold
-              text-white
-              transition-colors
-              hover:bg-accentBlue/90
-              disabled:cursor-not-allowed
-              disabled:opacity-50
-            "
-            >
-              <FiPlay size={15} />
-              НАЧАТЬ НОВУЮ СЕССИЮ
-            </button>
+            {/*
+             * Кнопка «начать новую сессию» доступна только
+             * если бэк ещё не начислил XP за это занятие.
+             * После начисления новую сессию на то же занятие
+             * бэк отклоняет.
+             */}
+            {now.can_start_new_session !== false && (
+              <button
+                type="button"
+                disabled={loading}
+                onClick={onStart}
+                className="
+                  flex
+                  w-full
+                  items-center
+                  justify-center
+                  gap-2
+                  rounded-xl
+                  bg-accentBlue
+                  px-4
+                  py-3
+                  text-sm
+                  font-semibold
+                  text-white
+                  transition-colors
+                  hover:bg-accentBlue/90
+                  disabled:cursor-not-allowed
+                  disabled:opacity-50
+                "
+              >
+                <FiPlay size={15} />
+                НАЧАТЬ НОВУЮ СЕССИЮ
+              </button>
+            )}
+
+            {now.can_start_new_session === false && (
+              <p className="text-xs text-secondary">
+                За это занятие XP уже получен. Следующее занятие
+                появится автоматически после начала пары.
+              </p>
+            )}
           </div>
         )}
       </div>

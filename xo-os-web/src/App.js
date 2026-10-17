@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Routes, Route, useLocation } from 'react-router-dom';
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 
 import EmailVerificationPage from './pages/EmailVerificationPage';
 import PasswordResetPage from './pages/PasswordResetPage';
@@ -12,7 +12,6 @@ import StatsSection from './components/StatsSection';
 import DonutChart from './components/StatsSection/DonutChart';
 import WeeklyChart from './components/StatsSection/WeeklyChart';
 import Achievements from './components/Achievements';
-import CalendarObsidianBlock from './components/CalendarObsidianBlock';
 import PlayerCard from './components/PlayerCard';
 import NowBlock from './components/NowBlock';
 import RecentChanges from './components/RecentChanges';
@@ -22,22 +21,36 @@ import Login from "./components/Login";
 import Onboarding from "./components/Onboarding"; // New onboarding component
 
 function App() {
+
+  const VALID_SECTIONS = [
+    "dashboard",
+    "schedule",
+    "stats",
+    "achievements",
+    "settings",
+  ];
+  const routerLocation = useLocation();
+  const navigate = useNavigate();
   const [section, setSection] = useState("dashboard"); // будет переопределено, если не авторизован
   const [user, setUser] = useState(false);
   const [loadingAuth, setLoadingAuth] = useState(true); // пока проверяем статус
   const [onboardingCompleted, setOnboardingCompleted] = useState(false);
 
-  const location = useLocation();
+  // ---- Синхронизация секции с URL ----
   useEffect(() => {
-    const path = location.pathname;
-    // Если путь относится к вашим обычным разделам, обновляем section
-    if (path === '/dashboard') setSection('dashboard');
-    else if (path === '/schedule') setSection('schedule');
-    else if (path === '/stats') setSection('stats');
-    else if (path === '/achievements') setSection('achievements');
-    else if (path === '/settings') setSection('settings');
-    // для verify/reset/change будем обрабатываться ниже через Routes
-  }, [location]);
+    const path = routerLocation.pathname.replace(/^\/+/, ""); // "dashboard", "schedule", ...
+
+    if (VALID_SECTIONS.includes(path)) {
+      setSection(path);
+      return;
+    }
+
+    // Если пользователь уже авторизован, но зашёл по "пустому" пути
+    // (например, "/" или "/login" после логина) — уводим на dashboard
+    if (user && path === "") {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [routerLocation.pathname, user, navigate]);
 
   // ---- Проверяем, авторизован ли пользователь при монтировании ----
   useEffect(() => {
@@ -56,7 +69,6 @@ function App() {
             ...data.user,
             onboarding_completed: data.onboarding_completed,
           });
-          setSection("dashboard"); // сразу показываем дашборд
         }
         else {
           setUser(null);
@@ -78,10 +90,22 @@ function App() {
       setUser(null);
       return;
     }
+
     setUser({
       ...authData.user,
       onboarding_completed: authData.onboarding_completed ?? false,
     });
+
+    // Если в URL сейчас не валидная секция — уводим на dashboard
+    const path = routerLocation.pathname.replace(/^\/+/, "");
+    if (!VALID_SECTIONS.includes(path)) {
+      navigate("/dashboard", { replace: true });
+    }
+  };
+  const handleSelectSection = (id) => {
+    if (!VALID_SECTIONS.includes(id)) return;
+    setSection(id);
+    navigate(`/${id}`);   // ← это и сохраняет вкладку в URL
   };
   const handleLogout = async () => {
     try {
@@ -94,13 +118,13 @@ function App() {
     }
     setUser(null);
     setSection("dashboard");
-    // Redirect to login page after logout
-    window.location.href = "/login";
+    navigate("/login", { replace: true });
   };
 
   // Handle onboarding completion
   const handleOnboardingCompleted = () => {
     setOnboardingCompleted(true);
+    navigate("/dashboard", { replace: true });
   };
 
   // Если проверка ещё идёт – показываем спиннер
@@ -141,42 +165,47 @@ function App() {
 
   // ---------- Основной интерфейс (виден только после авторизации) ----------
   return (
-    <div className="min-h-screen bg-background text-primary font-sans">
-      <div className="flex min-h-screen">
+
+    <div className="h-screen w-full overflow-hidden bg-background text-primary font-sans">
+      <div className="flex h-full w-full">
         <Sidebar
-          onSelect={setSection}
+          onSelect={handleSelectSection}
           activeSection={section}
           user={user}
         />
 
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
           <Header onLogout={handleLogout} />
 
-          <main className="flex-1 p-6 overflow-y-auto space-y-6">
+          <main className="flex-1 p-4 pb-24 lg:p-6 lg:pb-6 overflow-y-auto space-y-6">
             {section === "dashboard" && (
-              <div className="flex-1 min-w-0 flex flex-row space-x-4">
+              <div className="flex-1 min-w-0 flex flex-col gap-4 lg:flex-row">
                 {/* Left column (main content) ~65% */}
-                <div className="w-[65%] flex flex-col space-y-4">
+                <div className="w-full lg:w-[65%] flex flex-col gap-4">
                   <PlayerCard user={user} />
-                  <NowBlock />
+
+                  {/* Блок «Сейчас» + ближайшее занятие — рядом на мобилке */}
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+                    <NowBlock />
+                    <NextEvent />
+                  </div>
+
                   <ScheduleList mode="today" />
                   <RecentChanges />
-                  <div className="flex-1"></div> {/* Lower left area - free space */}
                 </div>
+
                 {/* Right column (right rail) ~35% */}
-                <div className="w-[35%] flex flex-col space-y-4">
-                                    <DonutChart />
+                <div className="w-full lg:w-[35%] flex flex-col gap-4">
+                  <DonutChart />
                   <WeeklyChart />
                   <Achievements />
-                  <div className="flex flex-col space-y-2">
-                    <NextEvent />
-                    <CalendarObsidianBlock />
-                  </div>
+
                 </div>
               </div>
             )}
             {section === "schedule" && <ScheduleList mode="all" />}
             {section === "stats" && <StatsSection />}
+
             {section === "achievements" && <Achievements />}
             {section === "settings" && <Settings />}
             {/* Дополнительные секции можно добавить здесь */}

@@ -5,12 +5,15 @@ import {
   FiUser,
   FiArrowRight,
 } from "react-icons/fi";
+import { useFiltersRefreshKey } from "../hooks/useFiltersRefreshKey";
+import { useNavigate } from "react-router-dom";
 
-export default function NextEvent() {
+export default function NextEvent({ refreshKey = 0 }) {
+  const navigate = useNavigate();
+  const filtersKey = useFiltersRefreshKey();
   const [event, setEvent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
   useEffect(() => {
     const loadNextEvent = async () => {
       setLoading(true);
@@ -27,11 +30,42 @@ export default function NextEvent() {
 
         const schedule = await response.json();
 
-        if (Array.isArray(schedule) && schedule.length > 0) {
-          setEvent(schedule[0]);
-        } else {
+        if (!Array.isArray(schedule) || schedule.length === 0) {
           setEvent(null);
+          return;
         }
+
+        // Текущее время в формате HH:MM
+        const now = new Date();
+        const nowTime = [
+          String(now.getHours()).padStart(2, "0"),
+          String(now.getMinutes()).padStart(2, "0"),
+        ].join(":");
+
+        // Сегодняшняя дата в формате YYYY-MM-DD
+        const todayStr = [
+          now.getFullYear(),
+          String(now.getMonth() + 1).padStart(2, "0"),
+          String(now.getDate()).padStart(2, "0"),
+        ].join("-");
+
+        const upcoming = schedule
+          // Только сегодняшние события
+          .filter((item) => !item.date || item.date === todayStr)
+          // Пара ещё не закончилась: либо end_time > сейчас, либо (если end_time нет) time > сейчас
+          .filter((item) => {
+            const end = item.end_time || item.time;
+
+            if (!end) return false;
+
+            return String(end) > nowTime;
+          })
+          // Сортируем по времени начала
+          .sort((a, b) =>
+            String(a.time || "").localeCompare(String(b.time || ""))
+          );
+
+        setEvent(upcoming[0] || null);
       } catch (err) {
         console.error("Failed to fetch next event:", err);
         setError(err.message);
@@ -41,7 +75,7 @@ export default function NextEvent() {
     };
 
     loadNextEvent();
-  }, []);
+  }, [refreshKey, filtersKey]);
 
   if (loading) {
     return (
@@ -106,8 +140,37 @@ export default function NextEvent() {
     }
   };
 
+  const handleOpenInSchedule = () => {
+    const id = event?.stable_id || event?.id;
+    if (!id) return;
+
+    navigate("/schedule", {
+      state: {
+        highlightEventId: String(id),
+        ts: Date.now(), // чтобы повторный клик на ту же карточку тоже срабатывал
+      },
+    });
+  };
+
   return (
-    <section className="rounded-xl border border-border bg-panel p-5 transition-colors duration-180 hover:border-border/80 hover:bg-card">
+    <section
+      onClick={handleOpenInSchedule}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          handleOpenInSchedule();
+        }
+      }}
+      className="
+        rounded-xl border border-border bg-panel p-5
+        cursor-pointer
+        transition-colors duration-180
+        hover:border-accent-blue/40 hover:bg-card
+        focus:outline-none focus:ring-2 focus:ring-accent-blue/30
+      "
+    >
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -164,12 +227,12 @@ export default function NextEvent() {
             {event.type === "LECTURE"
               ? "Лекция"
               : event.type === "PRACTICE"
-              ? "Практика"
-              : event.type === "LAB"
-              ? "Лабораторная"
-              : event.type === "EXAM"
-              ? "Экзамен"
-              : "Занятие"}
+                ? "Практика"
+                : event.type === "LAB"
+                  ? "Лабораторная"
+                  : event.type === "EXAM"
+                    ? "Экзамен"
+                    : "Занятие"}
           </span>
         </div>
 

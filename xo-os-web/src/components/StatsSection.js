@@ -66,7 +66,7 @@ export default function StatsSection() {
             </p>
           </div>
 
-          <DonutChart refreshKey={refreshKey} />
+          <DonutChart refreshKey={refreshKey} mode="full" size={280}/>
         </section>
 
         {/* Weekly + subjects */}

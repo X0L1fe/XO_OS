@@ -4,8 +4,10 @@ import {
   FiArrowUp,
   FiClock,
 } from "react-icons/fi";
+import { useFiltersRefreshKey } from "../../hooks/useFiltersRefreshKey";
 
 export default function PlanFact({ refreshKey = 0 }) {
+  const filtersKey = useFiltersRefreshKey();
   const [data, setData] = useState({
     total: 0,
     completed: 0,
@@ -60,7 +62,7 @@ export default function PlanFact({ refreshKey = 0 }) {
     };
 
     loadProgress();
-  }, [refreshKey]);
+  }, [refreshKey, filtersKey]);
 
   const progress = useMemo(() => {
     return Math.min(

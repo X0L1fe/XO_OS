@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -15,7 +16,16 @@ from app.common.schedule_filters import (
     normalize_schedule_value,
 )
 from app.common.time import msk_now_naive
-from app.database.models import Lesson, ScheduleExclusion, User
+from app.database.db import db
+from app.database.models import (
+    GoogleCalendarConnection,
+    Lesson,
+    ScheduleExclusion,
+    User,
+)
+from app.google_calendar.service import GoogleCalendarSyncService
+
+logger = logging.getLogger(__name__)
 
 
 class ScheduleService:
@@ -226,3 +236,30 @@ class ScheduleService:
             )
 
         return result
+
+
+def _resync_google_for_user(user_id: int) -> None:
+    """
+    Фоновая пересборка событий в Google Calendar после смены фильтров.
+    Открывает свою сессию БД, потому что сессия запроса уже закрыта.
+    """
+    try:
+        with db.session() as session:
+            conn = (
+                session.query(GoogleCalendarConnection)
+                .filter(GoogleCalendarConnection.user_id == user_id)
+                .first()
+            )
+            calendar_id = conn.calendar_id if conn else None
+
+        if not calendar_id:
+            return
+
+        sync = GoogleCalendarSyncService(
+            db,
+            user_id=user_id,
+            calendar_id=calendar_id,
+        )
+        sync.sync_after_filter_change()
+    except Exception as e:
+        logger.warning("Failed to resync Google after filter change: %s", e)

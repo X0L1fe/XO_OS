@@ -51,9 +51,48 @@ async def start_focus_session(
     Start a new focus session for the current user.
     The backend determines the current lesson based on time and user's schedule.
     If there is already an active session, return it.
+
+    Запрещаем стартовать новую сессию, если по текущему занятию уже
+    начислен XP — иначе пользователь может фармить опыт на одной и той же паре.
     """
     with db.session() as session:
         focus_service = FocusService(session)
+
+        now = msk_now_naive()
+
+        # 1. Находим текущий урок пользователя (тот, что сейчас идёт)
+        current_lesson = (
+            session.query(Lesson)
+            .filter(
+                Lesson.user_id == current_user.id,
+                Lesson.start_time <= now,
+                Lesson.end_time >= now,
+            )
+            .order_by(Lesson.start_time)
+            .first()
+        )
+
+        # 2. Если урок есть — проверяем, не было ли уже
+        #    завершённой сессии с начисленным XP по этому уроку
+        if current_lesson is not None:
+            already_awarded = (
+                session.query(FocusSession)
+                .filter(
+                    FocusSession.user_id == current_user.id,
+                    FocusSession.lesson_id == current_lesson.id,
+                    FocusSession.status == "completed",
+                    FocusSession.xp_awarded > 0,
+                )
+                .first()
+            )
+
+            if already_awarded is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="XP has already been awarded for this lesson occurrence",
+                )
+
+        # 3. Всё ок — стартуем (или возвращаем существующую активную)
         session_obj = focus_service.start_focus_session(
             user_id=current_user.id,
             goal_text=goal_text,
@@ -68,10 +107,8 @@ async def start_focus_session(
             else "",
             "goal_text": session_obj.goal_text,
             "started_at": session_obj.started_at,
-            "elapsed_seconds": 0,  # Just started
-            "xp_preview": 3
-            if session_obj.completion_mode == "manual"
-            else 10,  # Preview: manual gives 3, AI gives 10 base
+            "elapsed_seconds": 0,
+            "xp_preview": 3 if session_obj.completion_mode == "manual" else 10,
         }
 
 
@@ -499,37 +536,55 @@ def get_now(
                 .first()
             )
 
-        if current_session:
-            elapsed_seconds = _calculate_elapsed_seconds(current_session)
+            if current_session:
+                elapsed_seconds = _calculate_elapsed_seconds(current_session)
 
-            lesson = None
-            if current_session.lesson_id:
-                lesson = (
-                    session.query(Lesson)
-                    .filter(Lesson.id == current_session.lesson_id)
-                    .first()
-                )
+                lesson = None
+                if current_session.lesson_id:
+                    lesson = (
+                        session.query(Lesson)
+                        .filter(Lesson.id == current_session.lesson_id)
+                        .first()
+                    )
 
-            lesson_subject = lesson.subject if lesson else ""
-            lesson_description = lesson.description if lesson else ""
+                lesson_subject = lesson.subject if lesson else ""
+                lesson_description = lesson.description if lesson else ""
 
-            return {
-                "type": "focus",
-                "session_id": current_session.id,
-                "status": current_session.status,
-                "lesson_id": current_session.lesson_id,
-                "lesson_subject": lesson_subject,
-                "lesson_description": lesson_description,
-                "goal_text": current_session.goal_text,
-                "started_at": current_session.started_at,
-                "ended_at": current_session.ended_at,  # ← обязательно
-                "elapsed_seconds": elapsed_seconds,
-                "duration_seconds": current_session.duration_seconds,  # ← обязательно
-                "completion_mode": current_session.completion_mode,  # ← обязательно
-                "verification_status": current_session.verification_status,  # ← вот это
-                "xp_awarded": current_session.xp_awarded,  # ← и это
-                "evidence_provided": bool(current_session.evidence_provided),
-            }
+                # Определяем, можно ли начинать новую сессию по этому уроку.
+                # Запрещаем, если по нему уже завершена сессия с XP.
+                can_start_new_session = True
+                if current_session.lesson_id:
+                    already_awarded = (
+                        session.query(FocusSession)
+                        .filter(
+                            FocusSession.user_id == current_user.id,
+                            FocusSession.lesson_id == current_session.lesson_id,
+                            FocusSession.status == "completed",
+                            FocusSession.xp_awarded > 0,
+                        )
+                        .first()
+                    )
+                    if already_awarded is not None:
+                        can_start_new_session = False
+
+                return {
+                    "type": "focus",
+                    "session_id": current_session.id,
+                    "status": current_session.status,
+                    "lesson_id": current_session.lesson_id,
+                    "lesson_subject": lesson_subject,
+                    "lesson_description": lesson_description,
+                    "goal_text": current_session.goal_text,
+                    "started_at": current_session.started_at,
+                    "ended_at": current_session.ended_at,
+                    "elapsed_seconds": elapsed_seconds,
+                    "duration_seconds": current_session.duration_seconds,
+                    "completion_mode": current_session.completion_mode,
+                    "verification_status": current_session.verification_status,
+                    "xp_awarded": current_session.xp_awarded,
+                    "evidence_provided": bool(current_session.evidence_provided),
+                    "can_start_new_session": can_start_new_session,
+                }
 
         # No active focus session, check for the current visible lesson
         excluded_categories, excluded_subjects = get_schedule_exclusions(
@@ -563,6 +618,18 @@ def get_now(
 
         if lesson:
             category = normalize_schedule_category(lesson.category)
+
+            already_awarded = (
+                session.query(FocusSession)
+                .filter(
+                    FocusSession.user_id == current_user.id,
+                    FocusSession.lesson_id == lesson.id,
+                    FocusSession.status == "completed",
+                    FocusSession.xp_awarded > 0,
+                )
+                .first()
+            )
+
             return {
                 "type": "lesson",
                 "lesson_id": lesson.id,
@@ -573,6 +640,7 @@ def get_now(
                     f"{lesson.end_time.strftime('%H:%M')}"
                 ),
                 "category": category,
+                "can_start_new_session": already_awarded is None,
             }
 
         # No active focus session and no current lesson

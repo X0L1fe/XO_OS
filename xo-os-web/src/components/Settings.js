@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   FiShield,
   FiCalendar,
@@ -15,6 +15,11 @@ import {
   FiChevronDown,
   FiXCircle,
   FiDroplet,
+  FiUsers,
+  FiSearch,
+  FiLoader,
+  FiArrowRight,
+  FiCheck,
 } from "react-icons/fi";
 
 const COLOR_OPTIONS = [
@@ -289,6 +294,19 @@ const Settings = () => {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // ============================================================
+  // GROUP (УЧЕБНАЯ ГРУППА)
+  // ============================================================
+
+  const [currentGroup, setCurrentGroup] = useState(null);
+  const [groups, setGroups] = useState([]);
+  const [groupSearch, setGroupSearch] = useState("");
+  const [selectedGroup, setSelectedGroup] = useState("");
+  const [groupsLoading, setGroupsLoading] = useState(true);
+  const [groupsError, setGroupsError] = useState(null);
+  const [groupSaving, setGroupSaving] = useState(false);
+  const [groupSaveError, setGroupSaveError] = useState(null);
+  const [groupSaveSuccess, setGroupSaveSuccess] = useState(false);
 
   // ============================================================
   // TELEGRAM
@@ -497,6 +515,71 @@ const Settings = () => {
 
     loadTelegramStatus();
   }, []);
+
+  // ============================================================
+  // CURRENT GROUP (через /api/mais/current-group)
+  // ============================================================
+
+  useEffect(() => {
+    const loadCurrentGroup = async () => {
+      try {
+        const response = await fetch("/api/mais/current-group", {
+          credentials: "include",
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        // Бэк отдаёт имя группы прямо в поле "group"
+        setCurrentGroup(data.group ?? null);
+      } catch (err) {
+        console.error("Failed to load current MAIS group:", err);
+      }
+    };
+
+    loadCurrentGroup();
+  }, []);
+
+  // ============================================================
+  // GROUPS LIST
+  // ============================================================
+
+  useEffect(() => {
+    const fetchGroups = async () => {
+      setGroupsLoading(true);
+      setGroupsError(null);
+
+      try {
+        const response = await fetch("/api/mais/groups", {
+          credentials: "include",
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        setGroups(Array.isArray(data.groups) ? data.groups : []);
+      } catch (err) {
+        console.error("Failed to fetch groups:", err);
+        setGroupsError("Не удалось загрузить список групп.");
+      } finally {
+        setGroupsLoading(false);
+      }
+    };
+
+    fetchGroups();
+  }, []);
+  // Когда узнали текущую группу — предзаполняем selectedGroup
+  useEffect(() => {
+    if (currentGroup) {
+      setSelectedGroup(currentGroup);
+    }
+  }, [currentGroup]);
 
   // ============================================================
   // GOOGLE CONNECT
@@ -838,6 +921,115 @@ const Settings = () => {
       alert(
         "Не удалось сохранить путь к Обсидиан. Пожалуйста, попробуйте снова."
       );
+    }
+  };
+
+  // ============================================================
+  // GROUPS FILTER
+  // ============================================================
+
+  const filteredGroups = useMemo(() => {
+    const term = groupSearch.trim().toLowerCase();
+
+    if (!term) {
+      return groups;
+    }
+
+    return groups.filter((group) => {
+      const name = String(group.name || "").toLowerCase();
+      const fac = String(group.fac || "").toLowerCase();
+      const level = String(group.level || "").toLowerCase();
+      const course = String(group.course || "").toLowerCase();
+
+      return (
+        name.includes(term) ||
+        fac.includes(term) ||
+        level.includes(term) ||
+        course.includes(term)
+      );
+    });
+  }, [groups, groupSearch]);
+
+  // ============================================================
+  // GROUP SAVE
+  // ============================================================
+
+  const handleGroupSave = async () => {
+    if (!selectedGroup) {
+      setGroupSaveError("Выберите группу.");
+      return;
+    }
+
+    if (selectedGroup === currentGroup) {
+      setGroupSaveError("Это уже ваша текущая группа.");
+      return;
+    }
+
+    setGroupSaving(true);
+    setGroupSaveError(null);
+    setGroupSaveSuccess(false);
+
+    try {
+      const groupResponse = await fetch("/api/mais/group", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          group_name: selectedGroup,
+        }),
+      });
+
+      if (!groupResponse.ok) {
+        const data = await groupResponse.json().catch(() => null);
+
+        throw new Error(
+          data?.detail ||
+          data?.message ||
+          "Не удалось сохранить выбранную группу."
+        );
+      }
+
+      const importResponse = await fetch("/api/mais/import", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          group_name: selectedGroup,
+        }),
+      });
+
+      if (!importResponse.ok) {
+        const data = await importResponse.json().catch(() => null);
+
+        throw new Error(
+          data?.detail ||
+          data?.message ||
+          "Не удалось импортировать расписание."
+        );
+      }
+
+      // Перезапрашиваем текущую группу с бэкенда
+      const statusResponse = await fetch("/api/mais/current-group", {
+        credentials: "include",
+      });
+
+      if (statusResponse.ok) {
+        const statusData = await statusResponse.json();
+        setCurrentGroup(statusData.group ?? null);
+      }
+
+      setGroupSaveSuccess(true);
+    } catch (err) {
+      console.error("Failed to save group:", err);
+      setGroupSaveError(
+        err.message || "Не удалось изменить группу."
+      );
+    } finally {
+      setGroupSaving(false);
     }
   };
 
@@ -1320,6 +1512,231 @@ const Settings = () => {
           )}
         </SettingSection>
       )}
+
+      {/* ======================================================
+          УЧЕБНАЯ ГРУППА
+      ======================================================= */}
+      <SettingSection
+        icon={
+          <SectionIcon tone="green">
+            <FiUsers className="h-5 w-5" />
+          </SectionIcon>
+        }
+        title="Учебная группа"
+        description="Группа используется для импорта расписания из МАИ. При смене группы расписание будет импортировано заново."
+      >
+        {/* Текущая группа */}
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background px-4 py-3">
+          <div>
+            <p className="text-xs uppercase tracking-wider text-text-muted">
+              Текущая группа
+            </p>
+
+            <p className="mt-1 text-sm font-semibold text-text-primary">
+              {currentGroup || "Не задана"}
+            </p>
+          </div>
+
+          {currentGroup ? (
+            <StatusBadge type="success">
+              <FiCheckCircle className="h-4 w-4" />
+              Активна
+            </StatusBadge>
+          ) : (
+            <StatusBadge type="warning">
+              <FiAlertCircle className="h-4 w-4" />
+              Не выбрана
+            </StatusBadge>
+          )}
+        </div>
+
+        {/* Поиск */}
+        <div className="mb-4">
+          <label
+            htmlFor="settings-group-search"
+            className="mb-2 block text-xs font-medium uppercase tracking-wider text-text-muted"
+          >
+            Поиск группы
+          </label>
+
+          <div className="relative">
+            <FiSearch className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+
+            <input
+              id="settings-group-search"
+              type="text"
+              value={groupSearch}
+              onChange={(e) => setGroupSearch(e.target.value)}
+              placeholder="Группа, факультет, курс или уровень"
+              className="
+                w-full
+                rounded-lg
+                border
+                border-border
+                bg-background
+                py-3
+                pl-10
+                pr-4
+                text-sm
+                text-text-primary
+                placeholder:text-text-muted
+                transition-all
+                duration-180
+                focus:border-accent-blue/50
+                focus:outline-none
+                focus:ring-2
+                focus:ring-accent-blue/10
+              "
+            />
+          </div>
+        </div>
+
+        {/* Список групп */}
+        <div className="overflow-hidden rounded-lg border border-border bg-background">
+          <div className="max-h-[320px] overflow-y-auto">
+            {groupsLoading ? (
+              <div className="flex min-h-[200px] flex-col items-center justify-center">
+                <FiLoader className="h-5 w-5 animate-spin text-accent-blue" />
+
+                <p className="mt-3 text-xs text-text-muted">
+                  Загружаем список групп...
+                </p>
+              </div>
+            ) : groupsError ? (
+              <div className="flex min-h-[200px] flex-col items-center justify-center px-6 text-center">
+                <FiAlertCircle className="h-5 w-5 text-accent-red" />
+
+                <p className="mt-3 text-sm text-accent-red">
+                  {groupsError}
+                </p>
+              </div>
+            ) : filteredGroups.length === 0 ? (
+              <div className="flex min-h-[200px] flex-col items-center justify-center px-6 text-center">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-card text-text-muted">
+                  <FiSearch className="h-4 w-4" />
+                </div>
+
+                <p className="mt-3 text-sm font-medium text-text-primary">
+                  Группы не найдены
+                </p>
+
+                <p className="mt-1 max-w-xs text-xs leading-5 text-text-muted">
+                  Попробуйте изменить поисковый запрос.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border/60">
+                {filteredGroups.map((group) => {
+                  const isSelected = selectedGroup === group.name;
+                  const isCurrent = currentGroup === group.name;
+
+                  return (
+                    <button
+                      key={group.name}
+                      type="button"
+                      onClick={() => {
+                        setSelectedGroup(group.name);
+                        setGroupSaveError(null);
+                        setGroupSaveSuccess(false);
+                      }}
+                      className={`
+                        group w-full px-4 py-3 text-left transition-colors
+                        ${isSelected ? "bg-accent-blue/10" : "hover:bg-card/70"}
+                      `}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`
+                            flex h-9 w-9 shrink-0 items-center justify-center
+                            rounded-lg border
+                            ${isSelected
+                              ? "border-accent-blue/30 bg-accent-blue/10 text-accent-blue"
+                              : "border-border bg-background text-text-muted"
+                            }
+                          `}
+                        >
+                          {isSelected ? (
+                            <FiCheck className="h-4 w-4" />
+                          ) : (
+                            <FiUsers className="h-4 w-4" />
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="truncate text-sm font-semibold text-text-primary">
+                              {group.name}
+                            </p>
+
+                            {isCurrent && (
+                              <span className="rounded-full border border-accent-green/20 bg-accent-green/5 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent-green">
+                                текущая
+                              </span>
+                            )}
+
+                            {isSelected && !isCurrent && (
+                              <span className="rounded-full border border-accent-blue/20 bg-accent-blue/5 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent-blue">
+                                выбрано
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-text-muted">
+                            {group.fac && <span>{group.fac}</span>}
+                            {group.level && <span>{group.level}</span>}
+                            {group.course && <span>{group.course} курс</span>}
+                          </div>
+                        </div>
+
+                        <FiChevronRight
+                          className={`
+                            h-4 w-4 shrink-0 transition-transform
+                            ${isSelected
+                              ? "translate-x-0.5 text-accent-blue"
+                              : "text-text-muted group-hover:translate-x-0.5"
+                            }
+                          `}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Ошибки / успех / кнопка */}
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-col gap-2">
+            {groupSaveSuccess && (
+              <StatusBadge type="success">
+                <FiCheckCircle className="h-4 w-4" />
+                Группа обновлена, расписание импортировано
+              </StatusBadge>
+            )}
+
+            {groupSaveError && (
+              <StatusBadge type="error">
+                <FiAlertCircle className="h-4 w-4" />
+                {groupSaveError}
+              </StatusBadge>
+            )}
+          </div>
+
+          <PrimaryButton
+            onClick={handleGroupSave}
+            disabled={
+              groupSaving ||
+              !selectedGroup ||
+              selectedGroup === currentGroup
+            }
+            icon={groupSaving ? FiLoader : FiArrowRight}
+          >
+            {groupSaving ? "Сохраняем..." : "Сменить группу"}
+          </PrimaryButton>
+        </div>
+      </SettingSection>
 
       {/* ======================================================
           TELEGRAM

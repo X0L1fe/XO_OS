@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useFiltersRefreshKey } from "../../hooks/useFiltersRefreshKey";
 
 export default function TopSubjects({ refreshKey = 0 }) {
+  const filtersKey = useFiltersRefreshKey();
   const [subjects, setSubjects] = useState([]);
   const [mode, setMode] = useState("hours");
 
@@ -53,7 +55,7 @@ export default function TopSubjects({ refreshKey = 0 }) {
     };
 
     loadSubjects();
-  }, [refreshKey]);
+  }, [refreshKey, filtersKey]);
 
   const values = useMemo(() => {
     return subjects.map((subject) =>

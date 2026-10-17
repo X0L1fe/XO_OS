@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useFiltersRefreshKey } from "../../hooks/useFiltersRefreshKey";
 
 export default function WeeklyChart({ refreshKey = 0 }) {
+  const filtersKey = useFiltersRefreshKey();
   const [weeks, setWeeks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -48,7 +50,7 @@ export default function WeeklyChart({ refreshKey = 0 }) {
     };
 
     loadWeeklyStats();
-  }, [refreshKey]);
+  }, [refreshKey, filtersKey]);
 
   const maxHours = useMemo(() => {
     return Math.max(

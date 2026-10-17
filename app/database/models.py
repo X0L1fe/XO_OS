@@ -336,6 +336,23 @@ class UserStats(Base):
         Integer,
         default=1,
     )
+    # Energy fields
+    energy: Mapped[float] = mapped_column(
+        Float,
+        default=100.0,
+    )
+    last_energy_update: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    last_fatigue_assessment: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    last_fatigue_update: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     user: Mapped["User"] = relationship(
         back_populates="stats",
@@ -544,6 +561,15 @@ class Lesson(Base):
         String(64),
         nullable=True,
     )
+    # Estimated value and minutes for productivity calculation
+    estimated_value: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    estimated_minutes: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+    )
 
     user: Mapped["User"] = relationship()
     focus_sessions: Mapped[List["FocusSession"]] = relationship(
@@ -667,9 +693,24 @@ class FocusSession(Base):
         Integer,
         default=0,
     )
+    xp_awarded_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     evidence_provided: Mapped[bool] = mapped_column(
         Integer,
         default=0,
+    )
+    # Intended lesson occurrence (for binding to event)
+    intended_lesson_occurrence_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lesson_occurrences.id"),
+        nullable=True,
+    )
+    # Flag indicating whether pauses are stored as intervals (true) or only total (false)
+    pauses_complete: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -685,6 +726,8 @@ class FocusSession(Base):
     lesson: Mapped["Lesson"] = relationship(
         back_populates="focus_sessions",
     )
+    # Relationship to lesson_occurrences (optional)
+    intended_lesson_occurrence: Mapped[Optional["LessonOccurrence"]] = relationship()
 
 
 class FocusEvidence(Base):
